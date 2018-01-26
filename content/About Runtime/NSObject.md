@@ -87,12 +87,12 @@ struct objc_class : objc_object {
 ```
 
 在objc中，**对象**的方法的实现不会存储在每个对象的结构体中，而是在相应的类里（如果每一个对象都要维护一个实例方法列表，那么开销太大了）。当一个**实例方法**被调用时，会通过对象的isa，在对应的类中找到方法的实现（具体是在class_data_bits_t结构体中查找，里面有一个方法列表）。
-![](/Users/huhuixin/Desktop/blog/content/image/Snip20180125_2.png)
+![](../image/Snip20180125_2.png)
 
 同时我们还从源码中看到，objc_class结构体中还有一个Class类型的superclass成员变量，指向了父类。通过这个指针可以查找从父类继承的方法。
 
 然而，对于类对象来说，它的isa又是什么呢？objective-c里面有一种叫做meta class元类的东西。
-![对象、类、元类关系图](/Users/huhuixin/Desktop/blog/content/image/objc-isa-class-diagram.png)
+![对象、类、元类关系图](../image/objc-isa-class-diagram.png)
 
 为了让我们能够调用类方法，类的isa“指针”必须指向一个类结构，并且该类结构必须包含我们可以调用的类方法列表。这就导致了元类的定义：元类是类对象的类。
 
@@ -224,7 +224,7 @@ objc_object::initIsa(Class cls, bool nonpointer, bool hasCxxDtor)
 `initInstanceIsa`方法实际上调用了`initIsa`方法，并且传入`nonpointer=true`参数。
 
 由于isa_t是一个联合体，所以`newisa.bits = ISA_MAGIC_VALUE;`把isa_t中的struct结构体初始化为：
-![](/Users/huhuixin/Desktop/blog/content/image/objc-isa-isat-bits.png)
+![](../image/objc-isa-isat-bits.png)
 实际上只设置了nonpointer和magic的值。
 
 #### nonpointer
