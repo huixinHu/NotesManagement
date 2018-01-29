@@ -1,6 +1,6 @@
 本文基于objc4-709源码进行分析。关于源码编译：[objc - 编译Runtime源码objc4-706](http://blog.csdn.net/WOTors/article/details/54426316?locationNum=7&fps=1)
 
-# 类和对象
+# 从NSObject说起Runtime的数据结构
 
 ## 1.类和对象的结构概要
 
@@ -104,6 +104,8 @@ struct objc_class : objc_object {
 - 根元类的父类指针指向基类（NSObject）。
 
 [What is a meta-class in Objective-C?](http://www.cocoawithlove.com/2010/01/what-is-meta-class-in-objective-c.html)
+
+ps:isa指针并不总是指向实例对象所属的类，不能依靠它来确定类型，而应用class方法。（KVO的实现中，将被观察的对象的isa指针指向一个中间类而非真实的类）。
 
 ## 2.isa_t结构体的分析
 通过源码，我们可以知道isa_t实际上是一个union联合体。其中的方法、成员变量、结构体公用一块空间。取决于其中的结构体，最终isa_t共占64位内存空间
@@ -252,6 +254,8 @@ nonpointer = 0 ，raw isa，表示isa_t不使用struct结构体，访问对象�
 
 nonpointer = 1，isa_t使用了struct结构体，此时 isa 不再是指针，不能直接访问 objc_object 的 isa 成员变量，但是其中也有 cls 的信息，只是其中关于类的指针都是保存在 shiftcls 中。
 
+`bool hasNonpointerIsa();`这个函数就是用来判断当前对象的isa是否启用tagged pointer的。
+
 #### magic
 用于判断当前对象是否已经完成初始化。
 
@@ -261,7 +265,7 @@ nonpointer = 1，isa_t使用了struct结构体，此时 isa 不再是指针，�
 #### shiftcls
 `newisa.shiftcls = (uintptr_t)cls >> 3;` 将对象对应的类的指针存入结构体的shiftcls成员中。
 
-将cls（地址）右移三位的原因：字节对齐。
+将cls（地址）右移三位的原因：字节对齐。类的指针按照8字节对齐。
 
 [为什么需要字节对齐](http://blog.csdn.net/qq_25077833/article/details/53454958)
 
@@ -269,6 +273,8 @@ nonpointer = 1，isa_t使用了struct结构体，此时 isa 不再是指针，�
 > 对象的内存地址必须对齐到字节的倍数，这样可以提高代码运行的性能，在 iPhone5s 中虚拟地址为 33 位，所以用于对齐的最后三位比特为 000，我们只会用其中的 30 位来表示对象的地址。
 > 
 > 将cls右移三位，可以将地址中无用的后三位清除减小内存的消耗。
+
+回过头来看，类的isa的shiftcls就指向元类了。
 
 ### ISA()
 由于开启了指针优化后，isa不再是指针，要获取类指针就要用到 ISA() 方法。
@@ -290,3 +296,628 @@ objc_object::ISA()
 #endif
 }
 ```
+
+## 2.cache_t 结构体的分析
+
+```cpp
+typedef unsigned int uint32_t;
+typedef uint32_t mask_t; 
+typedef unsigned long uintptr_t;
+typedef uintptr_t cache_key_t;
+
+struct cache_t {
+    struct bucket_t *_buckets;
+    mask_t _mask;
+    mask_t _occupied;
+    ......
+};
+
+struct bucket_t {
+private:
+    cache_key_t _key;
+    IMP _imp;
+    ......
+};
+```
+cache 存放着实例方法的缓存，提高方法调用效率。当一个对象调用一个方法时，它会先从缓存里面找这个方法，如果没有找到才会去类的方法列表中去找。
+
+如果一个对象调用一个方法，首先根据对象的isa找到对应的类，再在类的方法列表中寻找这个方法，如果找不到就到父类中的方法列表查找，一旦找到就调用。如果没有找到，有可能转发消息，也可能忽略它。但这样效率太低了，有些方法会经常用到，那么每次调用都要走一遍以上流程，是不是很慢？用cache来缓存方法，优先在 cache 中查找，找到就调用没找到再走正常路子。
+cache_t中存储了一个bucket_t结构体指针和两个无符号整形变量。
+
+bucket_t结构体中存储了IMP函数指针和unsigned long。_buckets 用来存储Method的链表。
+
+_mask 分配用来缓存bucket的总数。
+
+_occupied 当前占用的bucket数。
+
+## 4.class_data_bits_t
+
+之前说过，实例方法被调用时，会通过其持有 isa 指针寻找对应的类，然后在其中的 class_data_bits_t 中查找对应的方法。相对来说 class_data_bits_t 会有点复杂，包含了 class_rw_t 、class_ro_t 等重要的结构体。这一节会对 class_data_bits_t 进行分析，介绍方法是如何在objc中存取的。
+
+```cpp
+struct class_data_bits_t {
+
+    uintptr_t bits;
+    
+    class_rw_t* data() {
+        return (class_rw_t *)(bits & FAST_DATA_MASK);
+    }
+    ......
+};
+
+struct objc_class : objc_object {
+    // Class ISA;
+    Class superclass;           //父类的指针
+    cache_t cache;             // formerly cache pointer and vtable 方法缓存
+    class_data_bits_t bits;    // class_rw_t * plus custom rr/alloc flags 这个类的实例方法链表
+
+    class_rw_t *data() { 
+        return bits.data();
+    }
+    ......
+};
+```
+class_data_bits_t 结构体只含有一个64bit的bits变量，它存储了类相关的信息，和不同的以'FAST_'开头的flag掩码做按位与运算。
+
+uintptr_t bits存储了一个指向 class_rw_t 结构体的指针和三个标志位。bits在64位兼容版中的内容：
+
+```cpp
+// 当前类是swift类
+#define FAST_IS_SWIFT           (1UL<<0)
+//当前类或者父类含有默认的 retain/release/autorelease/retainCount/_tryRetain/_isDeallocating/retainWeakReference/allowsWeakReference 方法
+#define FAST_HAS_DEFAULT_RR     (1UL<<1)
+// 当前类的实例需要 raw isa
+#define FAST_REQUIRES_RAW_ISA   (1UL<<2)
+// 数据指针
+#define FAST_DATA_MASK          0x00007ffffffffff8UL
+```
+
+```
+class_rw_t* data() {
+        return (class_rw_t *)(bits & FAST_DATA_MASK);
+    }
+```
+在 objc_class 的 data 方法中，直接调用并返回了 class_data_bits_t 的data方法。bits 和 FAST_DATA_MASK做按位与运算，转换为 class_rw_t *并返回。
+
+Mac OS X 只使用 47 位内存地址，所以bits前 17 位空余出来。bits中最大的一块存储区域用于存储class_rw_t 指针，在 FAST_DATA_MASK 对应的[3,46]位数据段中。[3,46]一共是44位，有没有觉得44很眼熟？由于字节对齐，所以47位的后三位为0，可以用来做标志位，所以就有了另外三个标志位。
+
+除了 FAST_DATA_MASK 是用一段空间做存储外，其他宏都是用1bit。这些数据都有对应的getter、setter封装函数。比如：
+
+```cpp
+bool isSwift() {return getBit(FAST_IS_SWIFT);}
+
+void setIsSwift() {setBits(FAST_IS_SWIFT);}
+
+bool hasDefaultRR() {return getBit(FAST_HAS_DEFAULT_RR);}
+
+void setHasDefaultRR() {setBits(FAST_HAS_DEFAULT_RR);}
+```
+
+在64非兼容版本下还有更多的宏定义，位于objc-runtime-new.h文件中，如有需要请自行阅读源码。
+
+### class_rw_t
+
+从上面的分析中我们知道，class_data_bits_t 用了大段空间存储了 class_rw_t 指针。class_rw_t 提供了运行时对类扩展的能力，objc中的属性、方法、协议等信息都保存在 class_rw_t 结构体中。
+
+在 objc_class结构体中的注释写到 class_data_bits_t相当于 class_rw_t指针加上 rr/alloc 的标志。
+
+`class_data_bits_t bits; // class_rw_t * plus custom rr/alloc flags`
+
+```cpp
+struct class_rw_t {
+    // Be warned that Symbolication knows the layout of this structure.
+    uint32_t flags;
+    uint32_t version;
+
+    const class_ro_t *ro;
+
+    method_array_t methods; //方法
+    property_array_t properties;//属性
+    protocol_array_t protocols;//协议
+
+    Class firstSubclass;
+    Class nextSiblingClass;
+
+    char *demangledName;//是计算机语言用于解决实体名称唯一性的一种方法，做法是向名称中添加一些类型信息，用于从编译器中向连接器传递更多语义信息。
+    
+    ......
+};
+```
+
+关于32位 flags 标志，在源码中有这样一段注释：
+>  Values for class_rw_t->flags
+> These are not emitted by the compiler and are never used in class_ro_t. 
+> Their presence should be considered in future ABI versions.
+
+它的值不是由编译器设置的，并且从不在class_ro_t中使用。未来的ABI版本应考虑到他们的存在。
+
+flags 标记了类的一些状态，与生命周期、内存管理有关，有些位目前还没有定义。
+![](../image/Snip20180127_1.png)
+![](../image/Snip20180127_2.png)
+
+class_rw_t 中的 methods、properties、protocols 存放了和类的方法、属性、协议有关的信息。
+
+```cpp
+method_array_t methods;
+property_array_t properties;
+protocol_array_t protocols;
+
+class method_array_t : public list_array_tt<method_t, method_list_t> 
+class property_array_t : public list_array_tt<property_t, property_list_t> 
+class protocol_array_t : public list_array_tt<protocol_ref_t, protocol_list_t> 
+```
+
+method_array_t、property_array_t、protocol_array_t这三种类都继承自 list_array_tt<Element, List>这种结构。
+
+```cpp
+template <typename Element, typename List>
+class list_array_tt {
+    struct array_t {
+        uint32_t count;
+        List* lists[0];
+    };
+}
+```
+list_array_tt 存储一些元数据，Element表示元数据的类型，List是用于存储元数据的一维数组，比如 method_list_t 、 property_list_t 。由于list_array_tt 存储了List指针数组，所以list_array_tt实际上是元数据的二维数组。list_array_tt 有三种状态：
+- 自身为空
+- List指针数组只有一个指向元数据数组的指针
+- List指针数组有多个指针
+
+可以对list_array_tt不断进行扩张。比如：
+
+```cpp
+void attachLists(List* const * addedLists, uint32_t addedCount) {
+    if (addedCount == 0) return;
+
+	 //调用realloc将原空间扩展，把原数组复制到后面，新数组复制到前面
+    if (hasArray()) {
+        // many lists -> many lists
+        uint32_t oldCount = array()->count;
+        uint32_t newCount = oldCount + addedCount;
+        setArray((array_t *)realloc(array(), array_t::byteSize(newCount)));
+        array()->count = newCount;
+        memmove(array()->lists + addedCount, array()->lists, 
+                oldCount * sizeof(array()->lists[0]));
+        memcpy(array()->lists, addedLists, 
+               addedCount * sizeof(array()->lists[0]));
+    }
+    else if (!list  &&  addedCount == 1) {
+        // 0 lists -> 1 list
+        list = addedLists[0];
+    } 
+    
+    //List指针数组只有一个指针时
+    //malloc重新申请内存，最后一个位置留给原来元数据数组的指针
+    else {
+        // 1 list -> many lists
+        List* oldList = list;
+        uint32_t oldCount = oldList ? 1 : 0;
+        uint32_t newCount = oldCount + addedCount;
+        setArray((array_t *)malloc(array_t::byteSize(newCount)));
+        array()->count = newCount;
+        if (oldList) array()->lists[addedCount] = oldList;
+        memcpy(array()->lists, addedLists, 
+               addedCount * sizeof(array()->lists[0]));
+    }
+}
+```
+无论是哪一种逻辑，新加的方法列表都会添加到二维数组前面。
+
+有一个名字很类似的结构体 class_ro_t，'rw' 和 ro' 相信很容易就理解是 'readwrite' 和 'readonly'的意思吧。
+
+另外还有一个指向常量的指针`class_ro_t *ro`。因此在编译期间类的结构中的 class_data_bits_t *data 指向的是一个 class_ro_t * 指针。class_ro_t也是一个结构体，下一节我们来讲讲它。
+
+### class_ro_t
+
+class_rw_t 的内容可以在运行时动态修改，而 class_ro_t 存储了在类编译时就确定的信息，比如属性、方法、协议、成员变量。
+
+```cpp
+struct class_ro_t {
+    uint32_t flags;
+    uint32_t instanceStart;
+    uint32_t instanceSize;
+#ifdef __LP64__
+    uint32_t reserved;
+#endif
+
+    const uint8_t * ivarLayout;
+    
+    const char * name;
+    method_list_t * baseMethodList;
+    protocol_list_t * baseProtocols;
+    const ivar_list_t * ivars;
+
+    const uint8_t * weakIvarLayout;
+    property_list_t *baseProperties;
+
+    method_list_t *baseMethods() const {
+        return baseMethodList;
+    }
+};
+```
+
+在类进行初始化之前，通过object_class 的data()方法得到的实际是一个指向 class_ro_t 结构体的指针。
+
+instanceStart、instanceSize 两个成员变量的存在保证了objc2.0的ABI稳定性。[Non Fragile ivars](https://www.jianshu.com/p/3b219ab86b09)
+
+method_list_t、ivar_list_t、property_list_t 结构体都继承自 entsize_list_tt<Element, List, FlagMask> 。entsize_list_tt 是通过c++模板定义的容器类，提供了一些诸如count、get、迭代器iterator的方法和类，通过这些方法和类可以方便地遍历并获取容器内的数据。
+
+而在类进行初始化之时，会调用到一个 static Class realizeClass(Class cls) 方法（这个之后分析oc中的消息发送时会具体分析，这里只要知道会调用到这个方法即可）。
+
+realizeClass的实现节选：
+
+```cpp
+ro = (const class_ro_t *)cls->data();//强制转换
+if (ro->flags & RO_FUTURE) {
+    // This was a future class. rw data is already allocated.
+    rw = cls->data();
+    ro = cls->data()->ro;
+    cls->changeInfo(RW_REALIZED|RW_REALIZING, RW_FUTURE);
+} else {
+    // Normal class. Allocate writeable class data.
+    rw = (class_rw_t *)calloc(sizeof(class_rw_t), 1);//初始化一个 class_rw_t 结构体,分配可读写数据空间
+    rw->ro = ro;//设置结构体 ro 的值以及 flag
+    rw->flags = RW_REALIZED|RW_REALIZING;
+    cls->setData(rw);//最后设置正确的 data
+}
+```
+这里主要做了几个事：
+- 调用 object_class 的 data 方法，把得到的 class_rw_t 指针强制转换成 class_ro_t 指针。
+- 新初始化一个 class_rw_t ，分配可读写数据空间。
+- 将 class_ro_t 指针赋值给 class_rw_t->ro ，并设置 class_rw_t->flag 。
+- 设置 object_class 的正确 data 。
+
+也即由以下图1变成了图2：图片来源[深入解析 ObjC 中方法的结构](https://github.com/Draveness/analyze/blob/master/contents/objc/深入解析%20ObjC%20中方法的结构.md)
+![](../image/objc-method-before-realize.png)
+![](../image/objc-method-after-realize-class.png)
+
+但是此时 class_rw_t 中的方法，属性以及协议列表均为空。最后在 realizeClass 方法中 调用了 methodizeClass 方法来将类自己实现的方法（包括分类）、属性和遵循的协议加载到 methods、 properties 和 protocols 列表中。methodizeClass 方法节选：
+
+```cpp
+// Install methods and properties that the class implements itself.
+method_list_t *list = ro->baseMethods();
+if (list) {
+    prepareMethodLists(cls, &list, 1, YES, isBundleClass(cls));
+    rw->methods.attachLists(&list, 1);
+}
+
+property_list_t *proplist = ro->baseProperties;
+if (proplist) {
+    rw->properties.attachLists(&proplist, 1);
+}
+
+protocol_list_t *protolist = ro->baseProtocols;
+if (protolist) {
+    rw->protocols.attachLists(&protolist, 1);
+}
+```
+
+## 5.验证一下
+一下这part的内容基于Draveness大大《深入解析 ObjC 中方法的结构》一文中验证部分进行复现，分析运行时初始化过程的内存变化，作为自己敲一下代码所做的记录。
+
+```objective-c
+#import <Foundation/Foundation.h>
+@interface XXObject : NSObject
+@property (nonatomic, assign) CGFloat test;
+
+- (void)hello;
+@end
+
+
+#import "XXObject.h"
+@implementation XXObject
+- (void)hello {
+    NSLog(@"Hello");
+}
+@end
+
+主程序代码：
+#import <Foundation/Foundation.h>
+#import "XXObject.h"
+
+int main(int argc, const char * argv[]) {
+    @autoreleasepool {
+        Class cls = [XXObject class];
+        NSLog(@"%p", cls);
+    }
+    return 0;
+}
+```
+
+由于类在内存中的位置是编译期就确定的，在之后修改代码，也不会改变内存中的位置。所以先跑一次代码获取XXObject 在内存中的地址。地址为：0x1000011e0
+
+在运行时初始化之前加入断点：
+![](../image/Snip20180129_1.png)
+
+然后通过lldb验证一下：
+
+```cpp
+(lldb) p (objc_class *)0x1000011e0
+(objc_class *) $0 = 0x00000001000011e0
+(lldb) p (class_data_bits_t *)0x100001200 //偏移32为获取class_data_bits_t指针
+(class_data_bits_t *) $1 = 0x0000000100001200
+(lldb) p $1->data()
+warning: could not find Objective-C class data in the process. This may reduce the quality of type information available.
+(class_rw_t *) $2 = 0x0000000100001158
+(lldb) p (class_ro_t *)$2	//强制转换类型
+(class_ro_t *) $3 = 0x0000000100001158
+(lldb) p *$3
+(class_ro_t) $4 = {
+  flags = 128
+  instanceStart = 8
+  instanceSize = 16
+  reserved = 0
+  ivarLayout = 0x0000000000000000 <no value available>
+  name = 0x0000000100000f6e "XXObject"
+  baseMethodList = 0x00000001000010c8
+  baseProtocols = 0x0000000000000000
+  ivars = 0x0000000100001118
+  weakIvarLayout = 0x0000000000000000 <no value available>
+  baseProperties = 0x0000000100001140
+}
+```
+
+可以看到name、baseMethodList、ivars、baseProperties是有值的，对于后两者有值的原因：因为XXObject类中我添加了`@property (nonatomic, assign) CGFloat test;`属性，而属性也在编译期自动生成了一个对应的ivar(带下划线前缀的原属性名的成员变量)。
+
+```
+//获取ivars
+(lldb) p $4.ivars
+(const ivar_list_t *) $6 = 0x0000000100001118
+(lldb) p *$6
+//显示count=1只有一个ivar
+(const ivar_list_t) $7 = {
+  entsize_list_tt<ivar_t, ivar_list_t, 0> = {
+    entsizeAndFlags = 32
+    count = 1
+    first = {
+      offset = 0x00000001000011b0
+      name = 0x0000000100000f8b "_test"
+      type = 0x0000000100000fb2 "d"
+      alignment_raw = 3
+      size = 8
+    }
+  }
+}
+(lldb) p $7.get(0)
+(ivar_t) $8 = {
+  offset = 0x00000001000011b0
+  name = 0x0000000100000f8b "_test"
+  type = 0x0000000100000fb2 "d"
+  alignment_raw = 3
+  size = 8
+}
+
+//获取property
+(lldb) p $4.baseProperties
+(property_list_t *) $10 = 0x0000000100001140
+(lldb) p *$10
+(property_list_t) $11 = {
+  entsize_list_tt<property_t, property_list_t, 0> = {
+    entsizeAndFlags = 16
+    count = 1
+    first = (name = "test", attributes = "Td,N,V_test")
+  }
+}
+
+```
+
+查看 baseMethodList 中的内容：
+
+```cpp
+(lldb) p $4.baseMethodList
+(method_list_t *) $14 = 0x00000001000010c8
+(lldb) p *$14
+(method_list_t) $15 = {
+  entsize_list_tt<method_t, method_list_t, 3> = {
+    entsizeAndFlags = 24
+    count = 3
+    first = {
+      name = "hello"
+      types = 0x0000000100000f97 "v16@0:8"
+      imp = 0x0000000100000e20 (debug-objc`-[XXObject hello] at XXObject.m:11)
+    }
+  }
+}
+(lldb) p $15.get(0)
+(method_t) $16 = {
+  name = "hello"
+  types = 0x0000000100000f97 "v16@0:8"
+  imp = 0x0000000100000e20 (debug-objc`-[XXObject hello] at XXObject.m:11)
+}
+(lldb) p $15.get(1)
+(method_t) $17 = {
+  name = "test"
+  types = 0x0000000100000f9f "d16@0:8"
+  imp = 0x0000000100000e50 (debug-objc`-[XXObject test] at XXObject.h:11)
+}
+(lldb) p $15.get(2)
+(method_t) $18 = {
+  name = "setTest:"
+  types = 0x0000000100000fa7 "v24@0:8d16"
+  imp = 0x0000000100000e70 (debug-objc`-[XXObject setTest:] at XXObject.h:11)
+}
+```
+结果显示 baseMethodList 中有三个方法，打印出来看，第一个是 XXObject 的 hello 方法，其余两个是 test 属性的对应getter和setter方法。所以也就不难理解为什么objc中的property = ivar + getter + setter了。
+
+关于`"v16@0:8"`、`"d16@0:8"`、`"v24@0:8d16"` 请见[Type Encoding](https://developer.apple.com/library/mac/DOCUMENTATION/Cocoa/Conceptual/ObjCRuntimeGuide/Articles/ocrtTypeEncodings.html)
+
+以上这些都是在编译器就生成了的。
+
+接着来看一下如果没有把class_rw_t强转成class_ro_t时的情形：先打印出来留到后面与初始化之后进行对比。
+
+```cpp
+(lldb) p *$2
+(class_rw_t) $5 = {
+  flags = 128
+  version = 8
+  ro = 0x0000000000000010
+  methods = {
+    list_array_tt<method_t, method_list_t> = {
+       = {
+        list = 0x0000000000000000
+        arrayAndFlag = 0
+      }
+    }
+  }
+  properties = {
+    list_array_tt<property_t, property_list_t> = {
+       = {
+        list = 0x0000000100000f6e
+        arrayAndFlag = 4294971246
+      }
+    }
+  }
+  protocols = {
+    list_array_tt<unsigned long, protocol_list_t> = {
+       = {
+        list = 0x00000001000010c8
+        arrayAndFlag = 4294971592
+      }
+    }
+  }
+  firstSubclass = nil
+  nextSiblingClass = 0x0000000100001118
+  demangledName = 0x0000000000000000 <no value available>
+}
+```
+
+接着在 realizeClass 方法中的这个地方打一个断点：（直接和地址值进行比较是因为类在编译期就确定了在内存中的地址）
+![](../image/Snip20180129_2.png)
+判断当前类是否XXObject，此时还没有进行初始化，类结构体中的布局依旧是上面那样没有变化的。
+
+![](../image/Snip20180129_3.png)
+当这段代码运行完后，再来lldb打印一下：
+
+```cpp
+(lldb) p (objc_class *)0x1000011e0
+(objc_class *) $19 = 0x00000001000011e0
+(lldb) p (class_data_bits_t *)0x0000000100001200
+(class_data_bits_t *) $20 = 0x0000000100001200
+(lldb) p $20->data()
+(class_rw_t *) $21 = 0x0000000100f05030
+(lldb) p *$21
+(class_rw_t) $22 = {
+  flags = 2148007936
+  version = 0
+  ro = 0x0000000100001158
+  methods = {
+    list_array_tt<method_t, method_list_t> = {
+       = {
+        list = 0x0000000000000000
+        arrayAndFlag = 0
+      }
+    }
+  }
+  properties = {
+    list_array_tt<property_t, property_list_t> = {
+       = {
+        list = 0x0000000000000000
+        arrayAndFlag = 0
+      }
+    }
+  }
+  protocols = {
+    list_array_tt<unsigned long, protocol_list_t> = {
+       = {
+        list = 0x0000000000000000
+        arrayAndFlag = 0
+      }
+    }
+  }
+  firstSubclass = nil
+  nextSiblingClass = nil
+  demangledName = 0x0000000000000000 <no value available>
+}
+(lldb) p $22.ro
+(const class_ro_t *) $23 = 0x0000000100001158
+(lldb) p *$23
+(const class_ro_t) $24 = {
+  flags = 128
+  instanceStart = 8
+  instanceSize = 16
+  reserved = 0
+  ivarLayout = 0x0000000000000000 <no value available>
+  name = 0x0000000100000f6e "XXObject"
+  baseMethodList = 0x00000001000010c8
+  baseProtocols = 0x0000000000000000
+  ivars = 0x0000000100001118
+  weakIvarLayout = 0x0000000000000000 <no value available>
+  baseProperties = 0x0000000100001140
+}
+```
+可以看到，`$3`的`class_ro_t *` 已经被设置成`$22` class_rw_t中的 ro 成员了，但	class_rw_t 的 methods、properties、protocols 成员
+仍然为空。
+
+等到执行完 methodizeClass 方法：
+![](../image/Snip20180129_4.png)
+
+```cpp
+(lldb) p *$21
+(class_rw_t) $25 = {
+  flags = 2148007936
+  version = 0
+  ro = 0x0000000100001158
+  methods = {
+    list_array_tt<method_t, method_list_t> = {
+       = {
+        list = 0x00000001000010c8
+        arrayAndFlag = 4294971592
+      }
+    }
+  }
+  properties = {
+    list_array_tt<property_t, property_list_t> = {
+       = {
+        list = 0x0000000100001140
+        arrayAndFlag = 4294971712
+      }
+    }
+  }
+  protocols = {
+    list_array_tt<unsigned long, protocol_list_t> = {
+       = {
+        list = 0x0000000000000000
+        arrayAndFlag = 0
+      }
+    }
+  }
+  firstSubclass = nil
+  nextSiblingClass = 0x00007fffcd723f50
+  demangledName = 0x0000000000000000 <no value available>
+}
+```
+class_ro_t 中 baseMethodList 中的方法被添加到 class_rw_t 中的 methods 数组中，class_ro_t 中 baseProperties 被添加到 class_rw_t 中的 properties。核心都是通过在 methodizeClass 方法中执行 attachLists 方法添加类的方法、属性、协议：
+
+```cpp
+auto rw = cls->data();
+auto ro = rw->ro;
+
+// Install methods and properties that the class implements itself.
+method_list_t *list = ro->baseMethods();
+if (list) {
+    prepareMethodLists(cls, &list, 1, YES, isBundleClass(cls));
+    rw->methods.attachLists(&list, 1);
+}
+
+property_list_t *proplist = ro->baseProperties;
+if (proplist) {
+    rw->properties.attachLists(&proplist, 1);
+}
+
+protocol_list_t *protolist = ro->baseProtocols;
+if (protolist) {
+    rw->protocols.attachLists(&protolist, 1);
+}
+```
+
+### 总结
+
+- 类的方法、属性以及协议在编译期间存放到了“错误”的位置，直到 realizeClass 执行之后，才放到了 class_rw_t 指向的只读区域 class_ro_t，这样我们即可以在运行时为 class_rw_t 添加方法，也不会影响类的只读结构。
+
+- 在 class_ro_t 中的属性在运行期间就不能改变了，再添加方法时，会修改 class_rw_t 中的 methods 列表，而不是 class_ro_t 中的 baseMethodList
+
+参考文章：
+
+[从 NSObject 的初始化了解 isa](https://github.com/Draveness/analyze/blob/master/contents/objc/从%20NSObject%20的初始化了解%20isa.md#从-nsobject-的初始化了解-isa)
+
+[深入解析 ObjC 中方法的结构](https://github.com/Draveness/analyze/blob/master/contents/objc/深入解析%20ObjC%20中方法的结构.md)
