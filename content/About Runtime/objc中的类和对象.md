@@ -1,6 +1,6 @@
 本文基于objc4-709源码进行分析。关于源码编译：[objc - 编译Runtime源码objc4-706](http://blog.csdn.net/WOTors/article/details/54426316?locationNum=7&fps=1)
 
-# 从NSObject说起Runtime的数据结构
+# objc中的类和对象
 
 ## 1.类和对象的结构概要
 
@@ -50,7 +50,7 @@ struct objc_object {
 private:
     isa_t isa;//objc_object唯一成员变量
 public:
-	Class ISA();
+    Class ISA();
     Class getIsa();
     void initIsa(Class cls /*nonpointer=false*/);
     
@@ -297,7 +297,7 @@ objc_object::ISA()
 }
 ```
 
-## 2.cache_t 结构体的分析
+## 3.cache_t 结构体的分析
 
 ```cpp
 typedef unsigned int uint32_t;
@@ -454,16 +454,18 @@ template <typename Element, typename List>
 class list_array_tt {
     struct array_t {
         uint32_t count;
-        List* lists[0];
+        List* lists[0];//长度为0的数组，c99的写法，允许在运行期动态申请内存
     };
 }
 ```
-list_array_tt 存储一些元数据，Element表示元数据的类型，List是用于存储元数据的一维数组，比如 method_list_t 、 property_list_t 。由于list_array_tt 存储了List指针数组，所以list_array_tt实际上是元数据的二维数组。list_array_tt 有三种状态：
+list_array_tt 存储一些元数据，是通过c++模板定义的容器类，提供了一些诸如count、迭代器iterator的方法和类。Element表示元数据的类型，List表示存储元数据的容器，理解成是用于存储元数据的一维数组，比如 method_list_t 、 property_list_t 。由于list_array_tt 存储了List指针数组，所以list_array_tt实际上可以看做是元数据的二维数组。list_array_tt 有三种状态：
 - 自身为空
 - List指针数组只有一个指向元数据数组的指针
 - List指针数组有多个指针
 
-可以对list_array_tt不断进行扩张。比如：
+一个类创建之初可能处于前两个状态，如果用category或者class_addMethod来添加方法，就编程第三个状态，而且是不可逆的回不去前两个状态
+
+可以对list_array_tt不断进行扩张。比如在通过category添加方法时，就调用到这个方法，把新的方法列表（相当于是装有一个category所有方法的容器）添加到二维数组中：
 
 ```cpp
 void attachLists(List* const * addedLists, uint32_t addedCount) {
@@ -522,13 +524,13 @@ struct class_ro_t {
 
     const uint8_t * ivarLayout;
     
-    const char * name;
-    method_list_t * baseMethodList;
-    protocol_list_t * baseProtocols;
-    const ivar_list_t * ivars;
+    const char * name;//类名
+    method_list_t * baseMethodList;//方法列表
+    protocol_list_t * baseProtocols;//协议列表
+    const ivar_list_t * ivars;//ivar列表
 
     const uint8_t * weakIvarLayout;
-    property_list_t *baseProperties;
+    property_list_t *baseProperties;//属性列表
 
     method_list_t *baseMethods() const {
         return baseMethodList;
@@ -542,7 +544,16 @@ instanceStart、instanceSize 两个成员变量的存在保证了objc2.0的ABI�
 
 method_list_t、ivar_list_t、property_list_t 结构体都继承自 entsize_list_tt<Element, List, FlagMask> 。entsize_list_tt 是通过c++模板定义的容器类，提供了一些诸如count、get、迭代器iterator的方法和类，通过这些方法和类可以方便地遍历并获取容器内的数据。
 
-而在类进行初始化之时，会调用到一个 static Class realizeClass(Class cls) 方法（这个之后分析oc中的消息发送时会具体分析，这里只要知道会调用到这个方法即可）。
+```cpp
+template <typename Element, typename List, uint32_t FlagMask>
+struct entsize_list_tt {
+    uint32_t entsizeAndFlags;//总大小
+    uint32_t count;//个数
+    Element first;//第一个元数据
+};
+```
+
+而在类进行初始化之时，会调用到一个 `static Class realizeClass(Class cls)` 方法（这个之后分析oc中的消息发送时会具体分析，这里只要知道会调用到这个方法即可）。
 
 realizeClass的实现节选：
 
@@ -915,6 +926,149 @@ if (protolist) {
 - 类的方法、属性以及协议在编译期间存放到了“错误”的位置，直到 realizeClass 执行之后，才放到了 class_rw_t 指向的只读区域 class_ro_t，这样我们即可以在运行时为 class_rw_t 添加方法，也不会影响类的只读结构。
 
 - 在 class_ro_t 中的属性在运行期间就不能改变了，再添加方法时，会修改 class_rw_t 中的 methods 列表，而不是 class_ro_t 中的 baseMethodList
+
+## 6.对象的初始化
+
+创建一个 NSObject 对象的代码：`[[NSObject alloc] init];`
+
+`alloc` 方法的实现：
+
+```cpp
++ (id)alloc {
+    return _objc_rootAlloc(self);
+}
+```
+
+仅仅调用了一个私有方法`_objc_rootAlloc `：
+
+```cpp
+id _objc_rootAlloc(Class cls)
+{
+    return callAlloc(cls, false/*checkNil*/, true/*allocWithZone*/);
+}
+
+static ALWAYS_INLINE id
+callAlloc(Class cls, bool checkNil, bool allocWithZone=false)
+{
+    // 检查 cls 信息是否为 nil，如果为 nil，则无法创建新对象，返回 nil。
+    if (slowpath(checkNil && !cls)) return nil;
+
+#if __OBJC2__
+    //是否有自定义的allocWithZone方法
+    if (fastpath(!cls->ISA()->hasCustomAWZ())) {
+        //没有alloc / allocWithZone实现。
+        
+        //是否可以快速分配内存。这里好像是写死了返回false
+        if (fastpath(cls->canAllocFast())) {
+            bool dtor = cls->hasCxxDtor();//是否有析构器
+            id obj = (id)calloc(1, cls->bits.fastInstanceSize());
+            if (slowpath(!obj)) return callBadAllocHandler(cls);
+            obj->initInstanceIsa(cls, dtor);
+            return obj;
+        }
+        else {
+            id obj = class_createInstance(cls, 0);// 创建对象的关键函数
+            if (slowpath(!obj)) return callBadAllocHandler(cls);// 分配失败
+            return obj;
+        }
+    }
+#endif
+
+    // callAlloc 传入 allocWithZone = true
+    if (allocWithZone) return [cls allocWithZone:nil];// 这里 cls 的 allocWithZone 方法里也是调用了 class_createInstance。
+    return [cls alloc];
+}
+```
+
+关于`slowpath`、`fastpath`两个宏，实际上是__builtin_expect()，一个GCC的一个内建函数，用于分支预测优化。[__builtin_expect — 分支预测优化](https://www.cnblogs.com/LubinLew/p/GCC-__builtin_expect.html)。只需要知道` if(fastpath(x))` 与 `if(x) `是相同意思就可以了。
+
+实际上我在执行`[[XXObject alloc] init]`这句代码时，`if (fastpath(!cls->ISA()->hasCustomAWZ())) `并没有进入这个条件分支：
+![直接跳到这一步了](../image/Snip20180130_1.png)
+
+所以也即相当于：
+
+```cpp
+static ALWAYS_INLINE id
+callAlloc(Class cls, bool checkNil, bool allocWithZone=false)
+{
+	return [cls allocWithZone:nil];
+}
+```
+
+但很神奇的是，接下来并没有执行`allocWithZone`方法，这是一个让我觉得很迷的地方。最后落入的是这两个方法：
+![](../image/Snip20180130_2.png)
+
+```cpp
+id class_createInstance(Class cls, size_t extraBytes)
+{
+    return _class_createInstanceFromZone(cls, extraBytes, nil);
+}
+
+static __attribute__((always_inline)) 
+id 
+_class_createInstanceFromZone(Class cls, size_t extraBytes, void *zone, 
+                              bool cxxConstruct = true, 
+                              size_t *outAllocatedSize = nil)
+{
+    if (!cls) return nil;
+
+    assert(cls->isRealized());
+
+    // Read class's info bits all at once for performance
+    bool hasCxxCtor = cls->hasCxxCtor();// 是否有构造函数
+    bool hasCxxDtor = cls->hasCxxDtor();// 是否有析构函数
+    bool fast = cls->canAllocNonpointer();// 是否使用原始 isa 格式
+
+    size_t size = cls->instanceSize(extraBytes);// 需要分配的空间大小，从 instanceSize 实现可以知道对象至少16字节
+        if (outAllocatedSize) *outAllocatedSize = size;
+
+    id obj;
+    
+    if (!zone  &&  fast) {//会执行这个分支
+        obj = (id)calloc(1, size);//分配空间
+        if (!obj) return nil;
+        obj->initInstanceIsa(cls, hasCxxDtor);//看到了一个熟悉的方法~
+    } 
+    else { //这里不执行
+        if (zone) {
+            obj = (id)malloc_zone_calloc ((malloc_zone_t *)zone, 1, size);
+        } else {
+            obj = (id)calloc(1, size);
+        }
+        if (!obj) return nil;
+
+        // Use raw pointer isa on the assumption that they might be 
+        // doing something weird with the zone or RR.
+        obj->initIsa(cls);
+    }
+
+    if (cxxConstruct && hasCxxCtor) {
+        obj = _objc_constructOrFree(obj, cls);
+    }
+
+    return obj;
+}
+```
+
+在上面函数的实现中，执行了 `objc_object::initInstanceIsa(Class cls, bool hasCxxDtor)` 方法。在第二部分讲过，这个方法就是用来初始化isa_t结构体的。
+
+初始化 isa 之后，`[NSObject alloc]` 的工作算是做完了，下面就是 `init` 相关逻辑：
+
+```cpp
+- (id)init {
+    return _objc_rootInit(self);
+}
+
+id _objc_rootInit(id obj)
+{
+    return obj;
+}
+```
+
+可以看到， `init` 实际上只是返回了当前对象。
+
+总结一下对象的初始化过程主要做了两个事：1.分配需要的内存空间 2.初始化isa_t结构体。
+
 
 参考文章：
 
