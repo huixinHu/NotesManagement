@@ -397,7 +397,7 @@ void setHasDefaultRR() {setBits(FAST_HAS_DEFAULT_RR);}
 
 ### class_rw_t
 
-从上面的分析中我们知道，class_data_bits_t 用了大段空间存储了 class_rw_t 指针。class_rw_t 提供了运行时对类扩展的能力，objc中的属性、方法、协议等信息都保存在 class_rw_t 结构体中。
+从上面的分析中我们知道，class_data_bits_t 用了大段空间存储了 class_rw_t 指针。class_rw_t 提供了运行时对类扩展的能力，class_rw_t 结构体中保存了 objc 中的属性、方法、协议等信息。
 
 在 objc_class结构体中的注释写到 class_data_bits_t相当于 class_rw_t指针加上 rr/alloc 的标志。
 
@@ -458,12 +458,12 @@ class list_array_tt {
     };
 }
 ```
-list_array_tt 存储一些元数据，是通过c++模板定义的容器类，提供了一些诸如count、迭代器iterator的方法和类。Element表示元数据的类型，List表示存储元数据的容器，理解成是用于存储元数据的一维数组，比如 method_list_t 、 property_list_t 。由于list_array_tt 存储了List指针数组，所以list_array_tt实际上可以看做是元数据的二维数组。list_array_tt 有三种状态：
+list_array_tt 存储一些元数据，是通过c++模板定义的容器类，提供了一些诸如count、迭代器iterator的方法和类。Element表示元数据的类型，比如 method_t 、 property_t 、 protocol_ref_t；List表示存储元数据的容器，理解成是用于存储元数据的一维数组，比如 method_list_t 、 property_list_t 。由于list_array_tt 存储了List指针数组，所以list_array_tt实际上可以看做是元数据的二维数组。list_array_tt 有三种状态：
 - 自身为空
 - List指针数组只有一个指向元数据数组的指针
 - List指针数组有多个指针
 
-一个类创建之初可能处于前两个状态，如果用category或者class_addMethod来添加方法，就编程第三个状态，而且是不可逆的回不去前两个状态
+一个类创建之初可能处于前两个状态，如果用category或者class_addMethod来添加方法，就变成第三个状态，而且是不可逆的回不去前两个状态
 
 可以对list_array_tt不断进行扩张。比如在通过category添加方法时，就调用到这个方法，把新的方法列表（相当于是装有一个category所有方法的容器）添加到二维数组中：
 
@@ -507,7 +507,7 @@ void attachLists(List* const * addedLists, uint32_t addedCount) {
 
 有一个名字很类似的结构体 class_ro_t，'rw' 和 ro' 相信很容易就理解是 'readwrite' 和 'readonly'的意思吧。
 
-另外还有一个指向常量的指针`class_ro_t *ro`。因此在编译期间类的结构中的 class_data_bits_t *data 指向的是一个 class_ro_t * 指针。class_ro_t也是一个结构体，下一节我们来讲讲它。
+class_rw_t 的结构体成员中还有一个指向常量的指针`class_ro_t *ro`。因此在编译期间类的结构中的 class_data_bits_t *data 指向的是一个 class_ro_t * 指针。class_ro_t也是一个结构体，下一节我们来讲讲它。
 
 ### class_ro_t
 
@@ -542,7 +542,7 @@ struct class_ro_t {
 
 instanceStart、instanceSize 两个成员变量的存在保证了objc2.0的ABI稳定性。[Non Fragile ivars](https://www.jianshu.com/p/3b219ab86b09)
 
-method_list_t、ivar_list_t、property_list_t 结构体都继承自 entsize_list_tt<Element, List, FlagMask> 。entsize_list_tt 是通过c++模板定义的容器类，提供了一些诸如count、get、迭代器iterator的方法和类，通过这些方法和类可以方便地遍历并获取容器内的数据。
+method_list_t、ivar_list_t、property_list_t 结构体都继承自 entsize_list_tt<Element, List, FlagMask>  , protocol_list_t 的结构则相对简单很多。entsize_list_tt 是通过c++模板定义的容器类，提供了一些诸如count、get、迭代器iterator的方法和类，通过这些方法和类可以方便地遍历并获取容器内的数据。
 
 ```cpp
 template <typename Element, typename List, uint32_t FlagMask>
@@ -582,7 +582,7 @@ if (ro->flags & RO_FUTURE) {
 ![](../image/objc-method-before-realize.png)
 ![](../image/objc-method-after-realize-class.png)
 
-但是此时 class_rw_t 中的方法，属性以及协议列表均为空。最后在 realizeClass 方法中 调用了 methodizeClass 方法来将类自己实现的方法（包括分类）、属性和遵循的协议加载到 methods、 properties 和 protocols 列表中。methodizeClass 方法节选：
+但是此时 class_rw_t 中的方法，属性以及协议列表均为空。最后在 realizeClass 方法中 调用了 methodizeClass 方法来将类自己实现的方法（包括分类）、属性和遵循的协议加载到 methods、 properties 和 protocols 列表中（用到了在 class_rw_t 一节最后提到的 attachLists 方法）。methodizeClass 方法节选：
 
 ```cpp
 // Install methods and properties that the class implements itself.
@@ -602,6 +602,8 @@ if (protolist) {
     rw->protocols.attachLists(&protolist, 1);
 }
 ```
+
+可以这样说，经过`realizeClass`函数处理的类才成为了真正的类。
 
 ## 5.验证一下
 一下这part的内容基于Draveness大大《深入解析 ObjC 中方法的结构》一文中验证部分进行复现，分析运行时初始化过程的内存变化，作为自己敲一下代码所做的记录。
@@ -995,7 +997,7 @@ callAlloc(Class cls, bool checkNil, bool allocWithZone=false)
 }
 ```
 
-但很神奇的是，接下来并没有执行`allocWithZone`方法，这是一个让我觉得很迷的地方。最后落入的是这两个方法：
+但很神奇的是，接下来并没有执行`allocWithZone`方法(打了断点但无事发生)，这是一个让我觉得很迷的地方。最后落入的是这两个方法：
 ![](../image/Snip20180130_2.png)
 
 ```cpp
@@ -1024,7 +1026,7 @@ _class_createInstanceFromZone(Class cls, size_t extraBytes, void *zone,
 
     id obj;
     
-    if (!zone  &&  fast) {//会执行这个分支
+    if (!zone  &&  fast) {//跑代码时会执行这个分支
         obj = (id)calloc(1, size);//分配空间
         if (!obj) return nil;
         obj->initInstanceIsa(cls, hasCxxDtor);//看到了一个熟悉的方法~
