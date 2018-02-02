@@ -198,7 +198,7 @@ attachCategories(Class cls, category_list *cats, bool flush_caches)
 
 **新加的方法列表都会添加到`method_array_t`前面**。即原来类的方法列表方法顺序是A、B、C，category的方法列表方法顺序是D、E，插入之后的类方法列表的顺序是D、E、A、B、C。category 的方法被放到了新的方法列表的前面，runtime在查找方法的时候是沿着着方法列表从前往后查找的，一找到目标名字的方法就不会继续往后找了，这也就是为什么category 会“覆盖”类的同名方法，对原方法的调用实际上会调用 category 中的方法。
 
-
+由于在category_t中只有 property_list_t 没有 ivar_list_t ，并且在class_ro_t 中的ivar_list_t又是只读的，在category中的属性是不会生成实例变量。苹果这么做的目的是为了保护class在编译时期确定的内存空间的连续性，防止runtime增加的变量造成内存重叠。
 
 参考文章：
 [深入理解Objective-C：Category](https://tech.meituan.com/DiveIntoCategory.html)
