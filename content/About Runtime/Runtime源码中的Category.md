@@ -1,6 +1,6 @@
 本文基于objc4-709源码进行分析。
 
-# Runtime源码中的Category
+# Runtime源码中的Category和Associated Object
 
 ## 1.数据结构
 在 objc-private.h 文件中，可以看到 category 是 category_t 结构体的指针。
@@ -198,7 +198,70 @@ attachCategories(Class cls, category_list *cats, bool flush_caches)
 
 **新加的方法列表都会添加到`method_array_t`前面**。即原来类的方法列表方法顺序是A、B、C，category的方法列表方法顺序是D、E，插入之后的类方法列表的顺序是D、E、A、B、C。category 的方法被放到了新的方法列表的前面，runtime在查找方法的时候是沿着着方法列表从前往后查找的，一找到目标名字的方法就不会继续往后找了，这也就是为什么category 会“覆盖”类的同名方法，对原方法的调用实际上会调用 category 中的方法。
 
-由于在category_t中只有 property_list_t 没有 ivar_list_t ，并且在class_ro_t 中的ivar_list_t又是只读的，在category中的属性是不会生成实例变量。苹果这么做的目的是为了保护class在编译时期确定的内存空间的连续性，防止runtime增加的变量造成内存重叠。
+由于在category_t中只有 property_list_t 没有 ivar_list_t （无法添加实例变量），并且在class_ro_t 中的ivar_list_t又是只读的，在category中的属性是不会生成实例变量。苹果这么做的目的是为了保护class在编译时期确定的内存空间的连续性，防止runtime增加的变量造成内存重叠。
+
+## Associated Object
+
+在category中无法添加实例变量。平时我们在类中使用@property，编译器会为我们生成带下划线的实例变量、getter和setter方法。但是在 category 中就不会这样。
+
+```objective-c
+@interface HXObject : NSObject
+@property (nonatomic, strong) NSString *name;
+@end
+
+
+@interface HXObject (AssociateOJ)
+@property (nonatomic, strong) NSString *assoProperty;
+
+- (void)hello;
+@end
+
+
+@implementation HXObject (AssociateOJ)
+- (void)hello{
+    self.assoProperty = @"asso";
+    NSLog(@"%@", self.assoProperty);
+}
+@end
+```
+
+```objective-c
+int main(int argc, const char * argv[]) {
+    @autoreleasepool {
+
+        HXObject * hxoj = [[HXObject alloc] init];
+        [hxoj hello];
+    }
+    return 0;
+}
+```
+
+其实 Xcode 已经给了警告：
+![](../image/Snip20180202_1.png)
+
+运行这段代码，控制台报找不到 category 属性的 setter 方法：
+> Terminating app due to uncaught exception 'NSInvalidArgumentException', reason: '-[HXObject setAssoProperty:]: unrecognized selector sent to instance 0x100b17710'
+
+category 的属性存取方法需要手动实现，又或者用@dynamic实现。
+
+一般情况下，我们会使用关联对象来为已经存在的类添加“属性”。
+
+```objective-c
+@implementation HXObject (AssociateOJ)
+
+- (void)setAssoProperty:(NSString *)assoProperty {
+    objc_setAssociatedObject(self, @selector(assoProperty), assoProperty, OBJC_ASSOCIATION_COPY_NONATOMIC);
+}
+
+- (NSString *)assoProperty {
+    return objc_getAssociatedObject(self, _cmd);
+}
+
+- (void)hello {
+    self.assoProperty = @"123";
+}
+@end
+```
 
 参考文章：
 [深入理解Objective-C：Category](https://tech.meituan.com/DiveIntoCategory.html)
