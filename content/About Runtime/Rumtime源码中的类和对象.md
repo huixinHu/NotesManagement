@@ -582,7 +582,7 @@ if (ro->flags & RO_FUTURE) {
 ![](../image/objc-method-before-realize.png)
 ![](../image/objc-method-after-realize-class.png)
 
-但是此时 class_rw_t 中的方法，属性以及协议列表均为空。最后在 realizeClass 方法中 调用了 methodizeClass 方法来将类自己实现的方法（包括分类）、属性和遵循的协议加载到 methods、 properties 和 protocols 列表中（用到了在 class_rw_t 一节最后提到的 attachLists 方法）。methodizeClass 方法节选：
+但是此时 class_rw_t 中的方法，属性以及协议列表均为空。最后在 realizeClass 方法中 调用了 methodizeClass 方法来将类 class_ro_t 的方法、属性和遵循的协议加载到 methods、 properties 和 protocols 列表中（用到了在 class_rw_t 一节最后提到的 attachLists 方法），但是class_ro_t其中的 ivar 不会被拷贝（不能在运行时给已有的类增加实例变量）。methodizeClass 方法节选：
 
 ```cpp
 // Install methods and properties that the class implements itself.

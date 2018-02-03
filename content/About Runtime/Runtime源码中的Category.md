@@ -200,9 +200,9 @@ attachCategories(Class cls, category_list *cats, bool flush_caches)
 
 由于在category_t中只有 property_list_t 没有 ivar_list_t （无法添加实例变量），并且在class_ro_t 中的ivar_list_t又是只读的，在category中的属性是不会生成实例变量。苹果这么做的目的是为了保护class在编译时期确定的内存空间的连续性，防止runtime增加的变量造成内存重叠。
 
-## Associated Object
+## 3.Associated Object
 
-在category中无法添加实例变量。平时我们在类中使用@property，编译器会为我们生成带下划线的实例变量、getter和setter方法。但是在 category 中就不会这样。
+在category中可以添加属性但无法添加实例变量。平时我们在类中使用@property，编译器会为我们生成带下划线的实例变量、getter和setter方法，但是在 category 中就不会这样。
 
 ```objective-c
 @interface HXObject : NSObject
@@ -242,9 +242,9 @@ int main(int argc, const char * argv[]) {
 运行这段代码，控制台报找不到 category 属性的 setter 方法：
 > Terminating app due to uncaught exception 'NSInvalidArgumentException', reason: '-[HXObject setAssoProperty:]: unrecognized selector sent to instance 0x100b17710'
 
-category 的属性存取方法需要手动实现，又或者用@dynamic实现。
+**category 的属性存取方法需要手动实现，又或者用@dynamic实现。**@dynamic在这里我们不讨论。
 
-一般情况下，我们会使用关联对象来为已经存在的类添加“属性”。
+一般情况下，我们会使用关联对象来为已经存在的类添加“属性”。使用关联对象要引入`#import <objc/runtime.h>`头文件。
 
 ```objective-c
 @implementation HXObject (AssociateOJ)
@@ -261,9 +261,286 @@ category 的属性存取方法需要手动实现，又或者用@dynamic实现。
     self.assoProperty = @"123";
 }
 @end
+
+
+int main(int argc, const char * argv[]) {
+    @autoreleasepool {
+        HXObject * hxoj = [[HXObject alloc] init];
+        hxoj.assoProperty = @"asso";
+        NSLog(@"%@",hxoj.assoProperty);
+    }
+    return 0;
+}
+```
+关于怎么使用关联对象这里也不会详谈。
+
+通过`objc_getAssociatedObject`和`objc_setAssociatedObject `，给category实现了看起来像属性的存取方法的接口，还能使用点语法。通过关联对象模拟了实例变量。但仍需要记住的一点是，category不能生成实例变量，也不能给类增添实例变量。
+
+> 在分类中，因为类的实例变量的布局已经固定，使用@property已经无法向布局中添加新的实例变量（这样做可能会覆盖子类的实例变量），所以我们需要使用关联对象以及两个方法来模拟构成属性的三个要素。
+
+## 4.关联对象在runtime源码中的实现
+
+主要函数有三个：
+
+```objective-c
+//根据key值获取对应的关联对象
+id objc_getAssociatedObject(id object, const void *key);
+
+//以键值对的形式添加关联对象，参数value传入nil可以删除单个关联对象
+void objc_setAssociatedObject(id object, const void *key, id value, objc_AssociationPolicy policy);
+
+//移除所有关联对象
+void objc_removeAssociatedObjects(id object);
 ```
 
+接下来将对这三个方法进行分析，看看关联对象在runtime中是如何实现的。首先从`objc_setAssociatedObject`函数入手，但在此之前要先介绍四个涉及到的类。
+
+- ObjcAssociation ： value 和 policy 保存于此
+- ObjectAssociationMap ： key 保存于此
+- AssociationsManager
+- AssociationsHashMap ： object 保存于此
+
+### ObjcAssociation
+ObjcAssociation 这个类保存了关联策略policy以及关联对象value。其余还有构造、析构函数、成员变量的访问函数等等实现都比较简单。
+
+```cpp
+class ObjcAssociation {
+    uintptr_t _policy;//关联策略
+    id _value;//关联对象
+public:
+	//构造、析构函数 以及成员变量的访问方法等
+    ObjcAssociation(uintptr_t policy, id value) : _policy(policy), _value(value) {}
+    ObjcAssociation() : _policy(0), _value(nil) {}
+
+    uintptr_t policy() const { return _policy; }
+    id value() const { return _value; }
+    
+    bool hasValue() { return _value != nil; }
+};
+```
+
+### ObjectAssociationMap
+```cpp
+class ObjectAssociationMap : public std::map<void *, ObjcAssociation, ObjectPointerLess, ObjectAssociationMapAllocator> {
+public:
+    void *operator new(size_t n) { return ::malloc(n); }
+    void operator delete(void *ptr) { ::free(ptr); }
+};
+```
+ObjectAssociationMap 维护了从 key （就是那个 `void *` 参数）到ObjcAssociation的映射。
+
+### AssociationsManager
+
+```cpp
+spinlock_t AssociationsManagerLock;
+
+class AssociationsManager {
+    static AssociationsHashMap *_map;
+public:
+    AssociationsManager()   { AssociationsManagerLock.lock(); }
+    ~AssociationsManager()  { AssociationsManagerLock.unlock(); }
+    
+    //获取_map单例
+    AssociationsHashMap &associations() {
+        if (_map == NULL)
+            _map = new AssociationsHashMap();
+        return *_map;
+    }
+};
+```
+初始化、析构时分别对自旋锁 spinlock_t 进行 lock 和 unlock ，以此保证对 AssociationsManager 的操作线程安全。而 associations 函数实际上是获取了_map单例
+
+### AssociationsHashMap
+```cpp
+class AssociationsHashMap : public unordered_map<disguised_ptr_t, ObjectAssociationMap *, DisguisedPointerHash, DisguisedPointerEqual, AssociationsHashMapAllocator> {
+public:
+    void *operator new(size_t n) { return ::malloc(n); }
+    void operator delete(void *ptr) { ::free(ptr); }
+};
+```
+AssociationsHashMap 维护了从 disguised_ptr_t（实际上是个unsigned long） 到 ObjectAssociationMap 的映射。在稍后将会在源码中看到，disguised_ptr_t 来自于待添加 assiciated object 的对象，所以也即这个类维护的是从对象到 ObjectAssociationMap 的映射。
+
+总结以上内容来说，关联对象是存储在单独的哈希表中的。
+
+### 4.1objc_setAssociatedObject
+`objc_setAssociatedObject` 函数的实现中仅调用了`_object_set_associative_reference` 函数。配合注释以及上述介绍的四个相关类，这个方法的实现很好理解。
+
+```cpp
+/**
+ @param object 要绑定到哪个对象上（宿主对象）
+ @param key key
+ @param value 关联对象
+ @param policy 关联策略
+ */
+void _object_set_associative_reference(id object, void *key, id value, uintptr_t policy) {
+    //1.理解为一个临时的ObjcAssociation，在之后保存原有的ObjcAssociation
+    ObjcAssociation old_association(0, nil);
+    //2.根据策略选择retain 或 copy 这个属性
+    id new_value = value ? acquireValue(value, policy) : nil;
+    {
+        AssociationsManager manager;
+        //3.得到AssociationsHashMap单例
+        AssociationsHashMap &associations(manager.associations());
+        //4.得到一个代表对象的obj key（obj key要和key区分开来）
+        disguised_ptr_t disguised_object = DISGUISE(object);
+        //如果传入的关联对象value != nil
+        if (new_value) {
+            // 5.在AssociationsHashMap中根据obj key查找对应的ObjectAssociationMap
+            AssociationsHashMap::iterator i = associations.find(disguised_object);
+            // 6.找得到
+            if (i != associations.end()) {
+                ObjectAssociationMap *refs = i->second;
+                //6.1在ObjectAssociationMap中根据key查找ObjcAssociation
+                ObjectAssociationMap::iterator j = refs->find(key);
+                //6.2找得到，把原ObjcAssociation存到临时的old_association，然后更新新的ObjcAssociation
+                if (j != refs->end()) {
+                    old_association = j->second;
+                    j->second = ObjcAssociation(policy, new_value);
+                } else {
+                    //6.3找不到，就在ObjectAssociationMap中新增一个'key-ObjcAssociation'映射
+                    (*refs)[key] = ObjcAssociation(policy, new_value);
+                }
+            }
+            //7.找不到
+            else {
+                //7.1新建一个ObjectAssociationMap实例，把'对象-ObjectAssociationMap'的映射填入AssociationsHashMap；把'key-ObjcAssociation'的映射填入ObjectAssociationMap
+                ObjectAssociationMap *refs = new ObjectAssociationMap;
+                associations[disguised_object] = refs;
+                (*refs)[key] = ObjcAssociation(policy, new_value);
+                object->setHasAssociatedObjects();//7.2这个方法会标记对象含有关联对象（将isa_t结构体中的标记位has_assoc置为true）
+            }
+        }
+        //8.如果传入的关联对象value == nil
+        else {
+            // 在AssociationsHashMap中根据obj key查找对应的ObjectAssociationMap
+            AssociationsHashMap::iterator i = associations.find(disguised_object);
+            //如果找得到，移除ObjectAssociationMap中key对应的ObjcAssociation
+            if (i !=  associations.end()) {
+                ObjectAssociationMap *refs = i->second;
+                ObjectAssociationMap::iterator j = refs->find(key);
+                if (j != refs->end()) {
+                    old_association = j->second;
+                    refs->erase(j);
+                }
+            }
+        }
+    }
+    //9.如果原关联对象有值，就释放该关联对象
+    if (old_association.hasValue()) ReleaseValue()(old_association);
+}
+```
+1. 创建一个临时的`ObjcAssociation`，在之后保存原有的关联对象。
+2. 根据关联策略选择 `retain` 或 `copy` 这个属性。
+3. 创建一个`AssociationsManager`实例，获取`AssociationsHashMap`单例。
+4. 用`DISGUISE(object)`得到一个代表对象的obj key（obj key要和key区分开来）。
+5. 如果方法的参数 value != nil。在`AssociationsHashMap`中根据obj key查找对应的`ObjectAssociationMap`。如果方法的参数 value = nil，跳到第8步。
+6. 找得到`ObjectAssociationMap`。接着在`ObjectAssociationMap`中根据key查找`ObjcAssociation`。找到，把原`ObjcAssociation`存到临时的`old_association`，然后更新新的`ObjcAssociation`；找不到，就在`ObjectAssociationMap`中新增一个'key-ObjcAssociation'映射。
+7. 找不到`ObjectAssociationMap`。新建一个`ObjectAssociationMap`实例，把'对象-ObjectAssociationMap'的映射填入`AssociationsHashMap`；把'key-ObjcAssociation'的映射填入`ObjectAssociationMap`。
+8. 移除`ObjectAssociationMap`中key对应的`ObjcAssociation`。
+9. 如果原关联对象(`old_association`)有值，就释放该关联对象
+
+ps：这里注意一下obj key指的是`disguised_ptr_t disguised_object = DISGUISE(object)`得到的`disguised_object`。而key指的是方法的参数key。
+                             
+### 4.2objc_getAssociatedObject
+`objc_getAssociatedObject` 函数的实现中仅调用了`_object_get_associative_reference` 函数。代码中的查找逻辑和`objc_setAssociatedObject `中的差不多，有差别的地方我用注释写了一下。
+
+```cpp
+id _object_get_associative_reference(id object, void *key) {
+    id value = nil;
+    uintptr_t policy = OBJC_ASSOCIATION_ASSIGN;//默认值
+    {
+        AssociationsManager manager;
+        AssociationsHashMap &associations(manager.associations());
+        disguised_ptr_t disguised_object = DISGUISE(object);
+        AssociationsHashMap::iterator i = associations.find(disguised_object);
+        if (i != associations.end()) {
+            ObjectAssociationMap *refs = i->second;
+            ObjectAssociationMap::iterator j = refs->find(key);
+            if (j != refs->end()) {
+                ObjcAssociation &entry = j->second;
+                //获取value和policy
+                value = entry.value();
+                policy = entry.policy();
+                //根据policy调用retain方法
+                if (policy & OBJC_ASSOCIATION_GETTER_RETAIN) ((id(*)(id, SEL))objc_msgSend)(value, SEL_retain);
+            }
+        }
+    }
+    //根据policy调用autorelease方法
+    if (value && (policy & OBJC_ASSOCIATION_GETTER_AUTORELEASE)) {
+        ((id(*)(id, SEL))objc_msgSend)(value, SEL_autorelease);
+    }
+    return value;
+}
+```
+在查找到`ObjcAssociation`后获取其中的value和policy成员，policy的默认值是`OBJC_ASSOCIATION_ASSIGN `。根据获取得到的policy值决定对value进行`retain`或者`autorelease`.
+
+### objc_removeAssociatedObjects
+objc_removeAssociatedObjects会先使用hasAssociatedObjects函数来确认对象有没有关联对象，然后才调用`_object_remove_assocations`进行具体的**移除**操作。
+
+```cpp
+void objc_removeAssociatedObjects(id object) 
+{
+    //hasAssociatedObjects确认对象有没有关联对象
+    if (object && object->hasAssociatedObjects()) {
+        _object_remove_assocations(object);
+    }
+}
+
+void _object_remove_assocations(id object) {
+    vector< ObjcAssociation,ObjcAllocator<ObjcAssociation> > elements;
+    {
+        AssociationsManager manager;
+        AssociationsHashMap &associations(manager.associations());
+        if (associations.size() == 0) return;
+        disguised_ptr_t disguised_object = DISGUISE(object);
+        AssociationsHashMap::iterator i = associations.find(disguised_object);
+        if (i != associations.end()) {
+            ObjectAssociationMap *refs = i->second;
+            //把ObjectAssociationMap中的所有ObjcAssociation存到一个vector中
+            for (ObjectAssociationMap::iterator j = refs->begin(), end = refs->end(); j != end; ++j) {
+                elements.push_back(j->second);
+            }
+            //释放ObjectAssociationMap，移除AssociationsHashMap的'对象-ObjectAssociationMap'映射
+            delete refs;
+            associations.erase(i);
+        }
+    }
+    //对所有ObjcAssociation调用ReleaseValue()进行释放
+    for_each(elements.begin(), elements.end(), ReleaseValue());
+}
+```
+唔...查找`ObjcAssociation`的逻辑一样的。这里把`ObjectAssociationMap`中的所有`ObjcAssociation`存到一个vector中，然后释放`ObjectAssociationMap`、移除`AssociationsHashMap`的'对象-ObjectAssociationMap'映射，最后对保存在vector中的所有`ObjcAssociation`调用`ReleaseValue()`进行释放。
+
+### 生命周期
+对象的销毁函数：
+
+```cpp
+void *objc_destructInstance(id obj) 
+{
+    if (obj) {
+        // Read all of the flags at once for performance.
+        bool cxx = obj->hasCxxDtor();
+        bool assoc = obj->hasAssociatedObjects();
+
+        // This order is important.
+        if (cxx) object_cxxDestruct(obj);//调用对象的析构函数
+        if (assoc) _object_remove_assocations(obj);//移除所有关联对象
+        obj->clearDeallocating();//清空引用计数和weak表
+    }
+
+    return obj;
+}
+```
+在这个函数中我们看到，我们无需关心关联对象的生命周期，在销毁对象时，会检查这个对象有没有关联对象，有的话就调用`_object_remove_assocations`函数把所有关联对象**移除**掉。
+
+ps:根据[Objective-C Associated Objects 的实现原理](http://www.cocoachina.com/ios/20150629/12299.html)一文中的分析，
+**关联对象的释放时机与移除时机并不总是一致**，比如用关联策略 OBJC_ASSOCIATION_ASSIGN 进行关联的对象，很早就已经被释放了（由于autoreleasepool drain而释放），但是并没有被移除，而再使用这个关联对象时就会造成 Crash 。
+
 参考文章：
+
 [深入理解Objective-C：Category](https://tech.meituan.com/DiveIntoCategory.html)
 
 [结合 category 工作原理分析 OC2.0 中的 runtime](http://www.cocoachina.com/ios/20160804/17293.html)
+
+[Objective-C Associated Objects 的实现原理](http://www.cocoachina.com/ios/20150629/12299.html)
