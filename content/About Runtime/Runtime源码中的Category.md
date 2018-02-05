@@ -130,7 +130,7 @@ for (EACH_HEADER) {
  - 把类相关的category类方法、协议、类属性添加到元类上
  - 对协议的处理：同时附加到类、元类中
  
-`addUnattachedCategoryForClass`函数实际上把类（元类）和category做一个关联映射，把category及其类、元类注册到哈希表中。把category的方法、协议、属性附加到类上交给了 `remethodizeClass` 函数去做。
+`addUnattachedCategoryForClass`函数实际上把类（元类）和category做一个关联映射，把category及其类、元类注册到哈希表中。把category的方法、协议、属性附加到类上则交给了 `remethodizeClass` 函数去做。
 
 ```cpp
 static void remethodizeClass(Class cls)
@@ -198,7 +198,15 @@ attachCategories(Class cls, category_list *cats, bool flush_caches)
 
 **新加的方法列表都会添加到`method_array_t`前面**。即原来类的方法列表方法顺序是A、B、C，category的方法列表方法顺序是D、E，插入之后的类方法列表的顺序是D、E、A、B、C。category 的方法被放到了新的方法列表的前面，runtime在查找方法的时候是沿着着方法列表从前往后查找的，一找到目标名字的方法就不会继续往后找了，这也就是为什么category 会“覆盖”类的同名方法，对原方法的调用实际上会调用 category 中的方法。
 
-由于在category_t中只有 property_list_t 没有 ivar_list_t （无法添加实例变量），并且在class_ro_t 中的ivar_list_t又是只读的，在category中的属性是不会生成实例变量。苹果这么做的目的是为了保护class在编译时期确定的内存空间的连续性，防止runtime增加的变量造成内存重叠。
+由于在category_t中只有 property_list_t 没有 ivar_list_t （无法添加实例变量），并且在class_ro_t 中的ivar_list_t又是只读的，在category中的属性是不会生成实例变量。苹果这么做的目的是为了保护class在**编译时期**确定的内存空间的连续性，防止runtime增加的变量造成内存重叠。
+
+ps:虽然objective-c不允许往已存在的类中添加实例变量，但是在运行时创建的类是可以添加实例变量的，通过调用`addIvar`函数。但这个函数只能在`objc_allocateClassPair`、`objc_registerClassPair`这两个函数调用之间调用。
+
+> This function may only be called after objc_allocateClassPair and before objc_registerClassPair.Adding an instance variable to an existing class is not supported.
+> 
+> The class must not be a metaclass. Adding an instance variable to a metaclass is not supported.
+> 
+> The instance variable's minimum alignment in bytes is 1<<align. The minimum alignment of an instance variable depends on the ivar's type and the machine architecture. For variables of any pointer type, pass log2(sizeof(pointer_type)).
 
 ## 3.Associated Object
 
@@ -513,6 +521,8 @@ void _object_remove_assocations(id object) {
 唔...查找`ObjcAssociation`的逻辑一样的。这里把`ObjectAssociationMap`中的所有`ObjcAssociation`存到一个vector中，然后释放`ObjectAssociationMap`、移除`AssociationsHashMap`的'对象-ObjectAssociationMap'映射，最后对保存在vector中的所有`ObjcAssociation`调用`ReleaseValue()`进行释放。
 
 ### 生命周期
+在NSObject dealloc方法调用时，会调用到以下函数：
+
 对象的销毁函数：
 
 ```cpp
