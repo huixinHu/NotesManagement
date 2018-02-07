@@ -553,7 +553,7 @@ struct entsize_list_tt {
 };
 ```
 
-而在类进行初始化之时，会调用到一个 `static Class realizeClass(Class cls)` 方法（这个之后分析oc中的消息发送时会具体分析，这里只要知道会调用到这个方法即可）。
+而在类进行初始化之时，会调用到一个 `static Class realizeClass(Class cls)` 方法。
 
 realizeClass的实现节选：
 
@@ -604,6 +604,11 @@ if (protolist) {
 ```
 
 可以这样说，经过`realizeClass`函数处理的类才成为了真正的类。
+
+总结：
+
+- 编译器，类的相关方法、属性、实例变量、协议会被添加到class_ro_t这个只读结构体中。
+- 运行期，类第一次被调用时，class_rw_t会被初始化。
 
 ## 5.验证一下
 一下这part的内容基于Draveness大大《深入解析 ObjC 中方法的结构》一文中验证部分进行复现，分析运行时初始化过程的内存变化，作为自己敲一下代码所做的记录。
