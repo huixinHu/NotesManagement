@@ -324,11 +324,11 @@ cache 存放着实例方法的缓存，提高方法调用效率。当一个对�
 如果一个对象调用一个方法，首先根据对象的isa找到对应的类，再在类的方法列表中寻找这个方法，如果找不到就到父类中的方法列表查找，一旦找到就调用。如果没有找到，有可能转发消息，也可能忽略它。但这样效率太低了，有些方法会经常用到，那么每次调用都要走一遍以上流程，是不是很慢？用cache来缓存方法，优先在 cache 中查找，找到就调用没找到再走正常路子。
 cache_t中存储了一个bucket_t结构体指针和两个无符号整形变量。
 
-bucket_t结构体中存储了IMP函数指针和unsigned long。_buckets 用来存储Method的链表。
+`bucket_t`结构体中存储了IMP函数指针和`unsigned long` 的 `key`。`_buckets` 用来存储Method的链表。
 
-_mask 分配用来缓存bucket的总数。
+`_mask` 分配用来缓存bucket的总数。
 
-_occupied 当前占用的bucket数。
+`_occupied` 当前占用的bucket数。
 
 ## 4.class_data_bits_t
 
@@ -1072,7 +1072,7 @@ id _objc_rootInit(id obj)
 }
 ```
 
-可以看到， `init` 实际上只是返回了当前对象。
+可以看到， `init` 实际上只是返回了当前对象。(所以其实只写alloc不写init好像没啥影响？？？)
 
 总结一下对象的初始化过程主要做了两个事：1.分配需要的内存空间 2.初始化isa_t结构体。
 

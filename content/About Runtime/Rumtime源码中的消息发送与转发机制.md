@@ -1,3 +1,5 @@
+本文基于objc4-709源码进行分析。
+
 在对象上调用方法是Objective-C中经常使用的功能，用专业的术语讲这叫做“发送消息”，当初学objc的时候并不懂这是什么意思，只是把"[]"当做简单的方法调用。
 
 c语言使用“静态绑定”，在编译器就能决定运行时应调用的函数。在objective-c中，如果向某对象传递消息，就会使用动态绑定机制来决定需要调用的方法，虽然在底层所有方法都是c函数，但是对象收到消息后要调用哪个方法完全由运行期决定，甚至可以在运行时改变。
@@ -24,7 +26,24 @@ OBJC_EXPORT id objc_msgSend(id self, SEL op, ...)
 
 `objc_msgSend`会在接收者所属的类中搜索它的“方法列表”，如果能找到与选择子名称相符的方法，就跳至其实现代码；如果找不到就沿着继承体系向上查找，找到就跳转实现，找不到就转发消息，如果转发依旧没法处理，程序crash。
 
+**直接使用objc_msgSend**
+比如一个HXObject类中有如下方法：
+
+```objective-c
+-(void)showName:(NSString *)aName{
+    NSLog(@"name is %@",aName);
+}
+```
+
+那么我们可以像下面这样，使用objc_msgSend调用这个方法：
+
+```objective-c
+HXObject *objct = [[HXObject alloc] init];
+((void (*) (id, SEL)) objc_msgSend) (objct, sel_registerName("showAge"));
+```
+
 除了`objc_msgSend`还有几个长得很像的函数：`objc_msgSend_stret`、`objc_msgSendSuper`、`objc_msgSendSuper_stret`。本文中仅讨论`objc_msgSend`。
+
 - objc_msgSend_stret 返回值为结构体类型
 - objc_msgSendSuper 向父类发消息，返回值为id类型
 - objc_msgSendSuper_stret 向父类发消息，返回值为结构体
@@ -528,8 +547,18 @@ cache_fill(cls, sel, imp, inst);
 ### 8.done标签
 读操作解锁，并返回之前找到的IMP（包括`_objc_msgForward_impcache`）。
 
+### 总结
+消息发送步骤：
+
+1. 检查target是否为nil对象，objc允许对nil对象执行方法不会crash。
+2. 开始查找IMP，先从缓存中找，找到了就执行对应函数。
+3. 缓存中找不到就在当前类的方法列表中查找。
+4. 还是找不到就沿着继承层次自底向上找，一直找到NSObject类为止。
+5. 仍然没有找到，看看能不能进行动态方法解析。
+6. 动态方法解析还是解决不了之后会进入消息转发阶段。
+
 ## 三、消息转发Message Forwarding
-在消息发送阶段，如果没有找到IMP就会将`_objc_msgForward_impcache`作为IMP返回给`objc_msgSend`。在objc-msg-x86_64汇编代码中找到`_objc_msgForward_impcache`的实现。
+在消息发送阶段，如果没有找到IMP就会将`_objc_msgForward_impcache`作为IMP返回给`objc_msgSend`，最后执行这个IMP。在objc-msg-x86_64汇编代码中找到`_objc_msgForward_impcache`的实现。
 
 ```
 STATIC_ENTRY __objc_msgForward_impcache
@@ -558,7 +587,7 @@ END_ENTRY __objc_msgForward_stret
 ```
 可以看到`__objc_msgForward_impcache`会被转化为`__objc_msgForward_stret`或者`__objc_msgForward`。
 
-`_objc_msgForward_impcache`、`_objc_msgForward`、`_objc_msgForward_stret`本质上都是函数指针，都是用汇编实现的。下面只讨论`__objc_msgForward`。
+`_objc_msgForward_impcache`、`_objc_msgForward`、`_objc_msgForward_stret`本质上都是函数指针IMP，都是用汇编实现的。下面只讨论`__objc_msgForward`。
 
 从汇编中知道，`_objc_msgForward`会调用`_objc_forward_handler`。在objc-runtime.mm中的实现：
 
@@ -588,9 +617,9 @@ void objc_setForwardHandler(void *fwd, void *fwd_stret)
 ```
 `objc_setForwardHandler`是怎么被调用的，以及之后的消息转发调用栈，看这篇文章：[Objective-C 消息发送与转发机制原理](http://yulingtianxia.com/blog/2016/06/15/Objective-C-Message-Sending-and-Forwarding/) 中逆向工程部分的分析...由于汇编渣渣，我自己目前是看不懂的了，觉得作者真是大神..根据这篇文章的分析，之后的消息转发路径是这样的：
 
-1. 调用`forwardingTargetForSelector`把消息的接收者替换成另一个可以处理消息的对象（这个方法需要开发者重写，有实例方法版本也有类方法版本，不重写返回nil）。如果返回的是nil或者原接收者，就进入第2步。否则把消息转给新的接收者，转发过程结束。新的接收者又叫“备援接收者”。
+1. 重定向。调用`forwardingTargetForSelector`把消息的接收者替换成另一个可以处理消息的对象（这个方法需要开发者重写，有实例方法版本也有类方法版本，不重写返回nil）。如果返回的是nil或者原接收者，就进入第2步。否则把消息转给新的接收者，转发过程结束。新的接收者又叫“备援接收者”。
 
-2. 调用 `methodSignatureForSelector` 获取方法签名，生成 `NSInvocation` 对象，`NSInvocation`对象包含选择子、target、参数。再调用 `forwardInvocation` 处理 `NSInvocation` 对象，并将结果返回。如果对象没实现 `methodSignatureForSelector` 方法，进入第三步。
+2. 调用 `methodSignatureForSelector` 获取方法签名，生成 `NSInvocation` 对象，`NSInvocation`对象封装了选择子、target、参数。再调用 `forwardInvocation` 处理 `NSInvocation` 对象，并将结果返回。如果对象没实现 `methodSignatureForSelector` 方法，进入第三步。
 
  实现`forwardInvocation`方法时，若发现某调用操作不应由本类处理，则会调用超类同名方法，继承体系中每个类都有机会处理此调用请求，直到NSObject也不能处理，那么调用`doesNotRecognizeSelector`方法抛出异常。
  
@@ -600,6 +629,17 @@ void objc_setForwardHandler(void *fwd, void *fwd_stret)
 
 消息转发全流程：
 ![](../image/Snip20180207_1.png)
+
+总结：
+
+当调用对象上的某个方法，而该对象上没有实现这个方法的时候，会报unrecognized selector异常，但是抛出异常前runtime会给出三次拯救程序崩溃的机会：
+
+1.动态方法决议。（消息发送阶段）
+
+2.重定向。转交给备援接收者进行处理。
+
+3.调用 `methodSignatureForSelector` 获取方法签名，生成 `NSInvocation` 对象，再调用 `forwardInvocation` 处理 `NSInvocation` 对象，并将结果返回。
+
 
 ## 四、实例
 
@@ -771,6 +811,54 @@ HXForwardInvocation..m
     HXResolveMethod *resolve = [[HXResolveMethod alloc] init];
     [resolve dynamicMethod:@"hello"];
 }
+```
+
+4.以下代码运行结果是？
+
+```objective-c
+@interface NSObject (Sark)
++ (void)foo;
+- (void)foo;
+@end
+ 
+@implementation NSObject (Sark)
+- (void)foo {
+	NSLog(@"IMP: -[NSObject(Sark) foo]");
+}
+@end
+ 
+ 
+int main(int argc, const char * argv[]) {
+	@autoreleasepool {
+		[NSObject foo];
+		[[NSObject new] foo];
+	}
+	return 0;
+}
+
+```
+
+[](https://github.com/huixinHu/Personal-blog/blob/master/content/About%20Runtime/Runtime源码中的Category.md)
+
+## 五、其他
+### 方法的隐藏参数
+`[receiver message]`这样的方法调用，会被编译器转化为`objc_msgSend(receiver, selector)`这样一个函数。官方文档上说，`objc_msgSend`找到这个方法的实现代码后，会调用方法的实现并传给它两个隐藏参数：接收消息的对象（self）和方法选择器（_cmd）。
+
+虽然在方法的定义中没有明确声明这两个参数，但是我们仍然可以在方法中引用它们。
+
+### 获取方法地址
+`IMP` 这个函数指针指向了方法的实现。既然得到了执行某个实例某个方法的入口，我们就可以绕开消息传递阶段，直接执行方法。但是一般我们很少这样做。
+
+NSObject类中有个methodForSelector:实例方法（也有同名类方法），可以用来获取某个方法选择子对应的IMP。
+
+```cpp
+void (*setter)(id, SEL, BOOL);
+int i;
+ 
+setter = (void (*)(id, SEL, BOOL))[target methodForSelector:@selector(setFilled:)];
+//调用，要明确给出两个隐藏参数
+for ( i = 0 ; i < 1000 ; i++ )
+    setter(targetList[i], @selector(setFilled:), YES);
 ```
 
 ## 参考文章：
