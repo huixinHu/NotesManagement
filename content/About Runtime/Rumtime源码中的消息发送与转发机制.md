@@ -838,7 +838,15 @@ int main(int argc, const char * argv[]) {
 
 ```
 
-[](https://github.com/huixinHu/Personal-blog/blob/master/content/About%20Runtime/Runtime源码中的Category.md)
+这里给NSObject添加了分类。根据[Runtime源码中的Category和Associated Object](https://github.com/huixinHu/Personal-blog/blob/master/content/About%20Runtime/Runtime源码中的Category和Associated%20Object.md) 中的分析，分类中的实例方法会被添加到类的方法列表前面，类方法会被添加到元类的方法列表前面。
+
+这段代码category中声明了foo的类方法和实例方法，但是只实现了实例方法，所以只有`-foo`被添加到NSObject的方法列表中。
+
+根据前文的分析，`[NSObject foo]`会先在NSObject的元类中根据`foo`查找对应的IMP，这里当然会找不到；接着就在元类的superClass中查找，而NSObject的元类的superClass是NSObject自己，所以到了这一步就找到IMP了。因此`[NSObject foo]`这句代码会输出：`IMP: -[NSObject(Sark) foo]`。
+
+而`[[NSObject new] foo]`会输出`IMP: -[NSObject(Sark) foo]`应该也很容易理解吧。
+
+![](../image/objc-isa-class-diagram.png)
 
 ## 五、其他
 ### 方法的隐藏参数
@@ -860,6 +868,71 @@ setter = (void (*)(id, SEL, BOOL))[target methodForSelector:@selector(setFilled:
 for ( i = 0 ; i < 1000 ; i++ )
     setter(targetList[i], @selector(setFilled:), YES);
 ```
+
+### objc_msgSendSuper
+一道被说到滥的题：
+
+```cpp
+@implementation Son : Father
+- (id)init
+{
+    self = [super init];
+    if (self)
+    {
+        NSLog(@"%@", NSStringFromClass([self class]));
+        NSLog(@"%@", NSStringFromClass([super class]));
+    }
+    return self;
+}
+@end
+```
+
+以上代码会输出什么？
+
+用clang重写一下，以上代码会被转化成（截取核心代码）：
+
+```
+NSStringFromClass(((Class (*)(id, SEL))(void *)objc_msgSend)((id)self, sel_registerName("class")))
+
+NSStringFromClass(((Class (*)(__rw_objc_super *, SEL))(void *)objc_msgSendSuper)((__rw_objc_super){(id)self, (id)class_getSuperclass(objc_getClass("Son"))}, sel_registerName("class")))
+```
+
+当调用`[super class]`时，runtime会调用`objc_msgSendSuper`。
+
+```cpp
+OBJC_EXPORT void
+objc_msgSendSuper(void /* struct objc_super *super, SEL op, ... */ )
+    OBJC_AVAILABLE(10.0, 2.0, 9.0, 1.0, 2.0);
+```
+
+```cpp
+struct objc_super {
+    __unsafe_unretained _Nonnull id receiver;
+
+#if !defined(__cplusplus)  &&  !__OBJC2__
+    __unsafe_unretained _Nonnull Class class;
+#else
+    __unsafe_unretained _Nonnull Class super_class;
+#endif
+};
+#endif
+```
+
+`objc_msgSendSuper`有两个参数一个是`objc_super`结构体指针super，另一个是SEL选择子op。`objc_super`结构体中有两个成员变量，一个是接收消息的receiver，一个是当前类的父类`super_class`。
+
+super和self不同，不是隐藏参数，实际上是一个“编译器标识符”，当super关键字收到消息时，编译器会创建一个`objc_super`结构体。在上面这段代码中，构造的`objc_super`结构体第一个成员是self（所以receiver仍然是self），第二个成员是`(id)class_getSuperclass(objc_getClass("Son"))`，也即是Father。
+
+往往很容易就认为，`[super class]`调用的是`[super_class class]`。而实际上应该是这样的：从`super_class`的方法列表开始找IMP（不是从本类开始找的，注意了），沿着继承层次一直找到NSObject，而`class`方法最终会在NSObject中找到。找到后以`objc_super->receiver`去调用这个IMP。因此，`[super class]`实际上相当于是`objc_msgSend(objc->receiver, @selector(class))`
+
+> runtime源码中对于`objc_msgSendSuper`中的super参数的注释： A pointer to an objc_super data structure. Pass values identifying the context the message was sent to, including the instance of the class that is to receive the message and the superclass at which to start searching for the method implementation.
+
+这道题里，self即是son，而`objc_super->receiver = self`，所以`[super class]`的输出结果是"Son"。这道题的两个输出结果都是"Son"。
+
+ps:`[self class]` \ `object_getClass(self)` \ `object_getClass([self class])` 的关系：
+
+1.self是实例对象。`[self class]` = `object_getClass(self)`，`object_getClass([self class])` 得到元类。
+
+2.self是类对象，`[self class]`得到自身，`object_getClass(self)` = `object_getClass([self class])`得到元类。
 
 ## 参考文章：
 
