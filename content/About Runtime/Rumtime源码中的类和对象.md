@@ -297,6 +297,95 @@ objc_object::ISA()
 }
 ```
 
+### 下面这段代码的输出结果
+```objective-c
+@interface Sark : NSObject
+@end
+ 
+int main(int argc, const char * argv[]) {
+	@autoreleasepool {
+		BOOL res1 = [(id)[NSObject class] isKindOfClass:[NSObject class]];
+		BOOL res2 = [(id)[NSObject class] isMemberOfClass:[NSObject class]];
+		BOOL res3 = [(id)[Sark class] isKindOfClass:[Sark class]];
+		BOOL res4 = [(id)[Sark class] isMemberOfClass:[Sark class]];
+		NSLog(@"%d %d %d %d", res1, res2, res3, res4);
+	}
+	return 0;
+}
+```
+除了res1输出YES，其他三个都为NO。分析之前先来看一下相关方法的源码实现。
+
+```cpp
+//类方法class
++ (Class)class {
+    return self;
+}
+
+//实例方法class
+- (Class)class {
+    return object_getClass(self);
+}
+
+Class object_getClass(id obj)
+{
+    if (obj) return obj->getIsa();
+    else return Nil;
+}
+
+inline Class 
+objc_object::getIsa() 
+{
+    if (!isTaggedPointer()) return ISA();
+
+    uintptr_t ptr = (uintptr_t)this;
+    if (isExtTaggedPointer()) {
+        uintptr_t slot = 
+            (ptr >> _OBJC_TAG_EXT_SLOT_SHIFT) & _OBJC_TAG_EXT_SLOT_MASK;
+        return objc_tag_ext_classes[slot];
+    } else {
+        uintptr_t slot = 
+            (ptr >> _OBJC_TAG_SLOT_SHIFT) & _OBJC_TAG_SLOT_MASK;
+        return objc_tag_classes[slot];
+    }
+}
+
+
+//实例方法
+- (BOOL)isMemberOfClass:(Class)cls {
+    return [self class] == cls;
+}
+
+- (BOOL)isKindOfClass:(Class)cls {
+    for (Class tcls = [self class]; tcls; tcls = tcls->superclass) {
+        if (tcls == cls) return YES;
+    }
+    return NO;
+}
+
+//类方法
++ (BOOL)isMemberOfClass:(Class)cls {
+    return object_getClass((id)self) == cls;
+}
+
++ (BOOL)isKindOfClass:(Class)cls {
+    for (Class tcls = object_getClass((id)self); tcls; tcls = tcls->superclass) {
+        if (tcls == cls) return YES;
+    }
+    return NO;
+}
+```
+
+首先NSObject和Sark都分别调用了class类方法，得到的都是自身。
+
+然后这里调用的都是类方法。`+ isKindOfClass:`（参数下文用“参数cls”指代），这个方法会先使用`object_getClass`获得self的元类（`isKindOfClass`是类方法，所以self是类对象），然后判断参数cls是否等于元类，不相等则沿着继承层次循环判断参数cls是否等于super class。
+
+`[(id)[NSObject class] isKindOfClass:[NSObject class]]`相当于`[NSObject isKindOfClass:NSObject]`，NSObject依次和NSObject的元类、NSObject的元类的父类（也即NSObject自身）进行判断，与后者判断结果必然相等，所以res1输出YES。
+
+`[(id)[Sark class] isKindOfClass:[Sark class]]`相当于`[Sark isKindOfClass:Sark]`，Sark依次和Sark的元类、元类的父类（即NSObject的元类）、元类的父类的父类（即NSObject）、元类的父类的父类的父类（即nil）比较，都不相等，退出循环，返回NO。
+
+`+ isMemberOfClass:`也是使用`object_getClass`获得self的元类，然后与参数cls比较。所以NSObject、Sark和它们各自的元类比较，不相等。都返回NO。
+
+
 ## 3.cache_t 结构体的分析
 
 ```cpp
@@ -1076,9 +1165,65 @@ id _objc_rootInit(id obj)
 
 总结一下对象的初始化过程主要做了两个事：1.分配需要的内存空间 2.初始化isa_t结构体。
 
+## 7.对象的销毁
+对象的销毁会调用dealloc方法。当对象的引用计数=0，这个方法会被调用。
+
+```cpp
+- (void)dealloc {
+    _objc_rootDealloc(self);
+}
+
+void _objc_rootDealloc(id obj) {
+    obj->rootDealloc();
+}
+
+inline void objc_object::rootDealloc() {
+    if (isTaggedPointer()) return;  // 判断是否TaggedPointer
+
+    if (fastpath(isa.nonpointer  &&  
+                 !isa.weakly_referenced  &&  
+                 !isa.has_assoc  &&  
+                 !isa.has_cxx_dtor  &&  
+                 !isa.has_sidetable_rc))
+    {
+        free(this);
+    } 
+    else {
+        object_dispose((id)this);
+    }
+}
+```
+dealloc方法最终由`rootDealloc`函数进行实现。首先会判断是否TaggedPointer，如果是就直接返回。接下来根据isa的5个标志位判断对象能否快速释放，如果开启了isa指针优化、对象不曾被一个weak变量指向、没有关联对象、没有析构函数、引用计数不会过大需要用到sideTable来存储，符合以上条件就可以快速释放。
+
+快速释放的条件还是很苛刻的，所以一般都会用`object_dispose`进行慢速释放。`object_dispose`会调用`objc_destructInstance`。
+
+```cpp
+void *objc_destructInstance(id obj) 
+{
+    if (obj) {
+        bool cxx = obj->hasCxxDtor();
+        bool assoc = obj->hasAssociatedObjects();
+
+        if (cxx) object_cxxDestruct(obj);//调用对象的析构函数
+        if (assoc) _object_remove_assocations(obj);//移除所有关联对象
+        obj->clearDeallocating();//清空引用计数和weak表
+    }
+
+    return obj;
+}
+```
+销毁对象需要用到底层的c++析构函数，对实例变量进行释放。`object_cxxDestruct`的具体细节可以阅读[这篇孙源的文章](http://blog.sunnyxx.com/2014/04/02/objc_dig_arc_dealloc/)
+
+还需要调用`_object_remove_assocations`函数释放关联对象，有关关联对象的知识请阅读[我之前写的笔记](https://github.com/huixinHu/Personal-blog/blob/master/content/About%20Runtime/Runtime源码中的Category和Associated%20Object.md)
+
+最后就是用`clearDeallocating`方法进行引用计数表和weak表的清空，并且把weak对象全部置为nil。
 
 参考文章：
 
 [从 NSObject 的初始化了解 isa](https://github.com/Draveness/analyze/blob/master/contents/objc/从%20NSObject%20的初始化了解%20isa.md#从-nsobject-的初始化了解-isa)
 
 [深入解析 ObjC 中方法的结构](https://github.com/Draveness/analyze/blob/master/contents/objc/深入解析%20ObjC%20中方法的结构.md)
+
+[Objc 对象的今生今世](https://www.jianshu.com/p/f725d2828a2f)
+
+[ARC下dealloc过程及.cxx_destruct的探究](http://blog.sunnyxx.com/2014/04/02/objc_dig_arc_dealloc/)

@@ -697,6 +697,8 @@ class_addMethod(Class _Nullable cls, SEL _Nonnull name, IMP _Nonnull imp, const 
 - imp：新方法的实现c函数，IMP类型，根据定义`typedef void (*IMP)(void /* id, SEL, ... */ )`，函数必须包含两个参数，一个是`id self`，另一个是`SEL _cmd`，这两个参数在oc方法中是隐藏参数，默认存在的。
 - types：返回值和参数的类型，和“类型编码”相关的信息可以google一下。
 
+如果待添加的是oc方法，可以通过`method_getImplementation`获取方法的IMP，`method_getTypeEncoding`获取方法的类型编码。
+
 2.备援接收者
 
 ```objective-c
@@ -922,7 +924,7 @@ struct objc_super {
 
 super和self不同，不是隐藏参数，实际上是一个“编译器标识符”，当super关键字收到消息时，编译器会创建一个`objc_super`结构体。在上面这段代码中，构造的`objc_super`结构体第一个成员是self（所以receiver仍然是self），第二个成员是`(id)class_getSuperclass(objc_getClass("Son"))`，也即是Father。
 
-往往很容易就认为，`[super class]`调用的是`[super_class class]`。而实际上应该是这样的：从`super_class`的方法列表开始找IMP（不是从本类开始找的，注意了），沿着继承层次一直找到NSObject，而`class`方法最终会在NSObject中找到。找到后以`objc_super->receiver`去调用这个IMP。因此，`[super class]`实际上相当于是`objc_msgSend(objc->receiver, @selector(class))`
+往往很容易就认为，`[super class]`调用的是`[super_class class]`。而实际上应该是这样的：**从`super_class`的方法列表开始找IMP**（不是从本类开始找的，注意了），沿着继承层次一直找到NSObject，而`class`方法最终会在NSObject中找到。找到后以`objc_super->receiver`去调用这个IMP。因此，`[super class]`实际上相当于是`objc_msgSend(objc->receiver, @selector(class))`
 
 > runtime源码中对于`objc_msgSendSuper`中的super参数的注释： A pointer to an objc_super data structure. Pass values identifying the context the message was sent to, including the instance of the class that is to receive the message and the superclass at which to start searching for the method implementation.
 
