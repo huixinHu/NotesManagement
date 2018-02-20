@@ -93,11 +93,11 @@ SideTable用来管理引用计数表和weak表，用一个自旋锁来保证这�
 
 2. `RefcountMap refcnts`保存对象具体的引用计数的值。RefcountMap可以把它理解成c++中的Map，维护了从对象地址到引用计数的映射。这里举个例子来理解一下这里的分块化方式：假设内存中有16个对象：地址0x0000、0x0001、...0x000f。然后我用一个散列表SideTables[8]来存放这16个对象，假设每两个对象映射相同（比如0x0000、0x0001这两个对象），冲突的概率是1/8，那么把他们的内存管理都放到同一个SideTable中，然后通过`table.refcnts.find(0x0000)`来获得地址为0x0000的对象的真正引用计数。
 
-可能由于内存中对象的数目十分巨大，这样做能起到分流的作用。Hash值相同的对象，交给了同一个`SideTable`进行管理。
+ 可能由于内存中对象的数目十分巨大，这样做能起到分流的作用。Hash值相同的对象，交给了同一个`SideTable`进行管理。
 
-`RefcountMap`的细节稍后再谈，这里先把SideTable的构成过一遍。
+ `RefcountMap`的细节稍后再谈，这里先把SideTable的构成过一遍。
 
-3. `weak_table_t weak_table` 苹果使用一个全局的 weak 表来保存所有的 weak 引用。weak表其实是一个Hash表，将对象的地址作为键，`weak_entry_t` 作为值。`weak_entry_t` 中保存了所有指向该对象的 weak 指针。
+3. `weak_table_t weak_table` 苹果使用一个全局的 weak 表来保存所有的 weak 引用。
 
 ### RefcountMap
 ```cpp
@@ -137,11 +137,11 @@ struct DenseMapInfo<DisguisedPtr<T>> {
 ```
 
 ### weak_table_t
-之前说weak表其实是一个Hash表，将对象的地址作为键，`weak_entry_t` 作为值。`weak_entry_t` 中保存了所有指向该对象的 weak 指针。weak表的定义：
+之前说weak表其实是一个Hash表，将对象的地址作为key，该指向对象的weak指针的**地址**数组作为value，由`weak_entry_t`这个结构来负责维护和存储。weak表的定义：
 
 ```cpp
 struct weak_table_t {
-    weak_entry_t *weak_entries;//是一个数组，保存所有指向指定对象的weak指针
+    weak_entry_t *weak_entries;//是一个weak_entry_t数组
     size_t    num_entries;//维护数组的size
     uintptr_t mask; //参与判断引用计数的辅助量
     uintptr_t max_hash_displacement; //最大偏移量
@@ -155,10 +155,10 @@ struct weak_table_t {
 #define REFERRERS_OUT_OF_LINE 2
 
 struct weak_entry_t {
-    DisguisedPtr<objc_object> referent;//对象地址
+    DisguisedPtr<objc_object> referent;//key：对象地址
     union {
         struct {
-            weak_referrer_t *referrers;//可变数组，保存所有指向这个对象的弱引用的指针。
+            weak_referrer_t *referrers;//value：可变数组，保存所有指向这个对象的weak指针的地址。
             uintptr_t        out_of_line_ness : 2;
             uintptr_t        num_refs : PTR_MINUS_2;
             uintptr_t        mask;
@@ -175,9 +175,11 @@ typedef DisguisedPtr<objc_object *> weak_referrer_t;
 ```
 根据前文的分析，DisguisedPtr是对`objc_object*`的封装，解决内存泄漏的问题。所以`referent`是对象的地址。
 
-`referrers`是一个可变数组，保存了所有指向这个对象的弱引用的指针。当对象被释放时，`referrers`中的所有指针都会被置为nil。
+`referrers`是一个可变数组，保存了所有指向这个对象的弱引用的指针（的地址）。当对象被释放时，`referrers`中的所有指针都会被置为nil。
 
 `inline_referrers`是一个大小为4的数组，默认情况下用来存储弱引用指针，如果数量大于4的时候就改用`referrers`来存储。
+
+关于weak表更详细的分析，放到另一篇笔记上讲。
 
 ## 二.retain
 retain方法的实现代码：
@@ -197,7 +199,7 @@ objc_object::rootRetain()
 
 `rootRetain`函数的两个参数传入的都是false，接下来对这个函数进行简化分析。
 
-####1. retain count无进位，`extra_rc`的位数足够存储引用计数。
+#### 1. retain count无进位，`extra_rc`的位数足够存储引用计数。
 ```cpp
 ALWAYS_INLINE id 
 objc_object::rootRetain(bool tryRetain, bool handleOverflow)
@@ -227,7 +229,7 @@ objc_object::rootRetain(bool tryRetain, bool handleOverflow)
 
 留意`#define RC_ONE   (1ULL<<56)`，`extra_rc`正好位于`isa_t`中的56~63位，所以`addc(newisa.bits, RC_ONE, 0, &carry)`是对`extra_rc`加一。
 
-####2.有进位
+#### 2.有进位
 ```cpp
 ALWAYS_INLINE id 
 objc_object::rootRetain(bool tryRetain, bool handleOverflow)
@@ -267,7 +269,7 @@ objc_object::rootRetain_overflow(bool tryRetain)
 ```
 `rootRetain_overflow`函数重新调用了一次`rootRetain`，只不过这次参数`handleOverflow`传入的是true，接下来就要处理溢出了。
 
-####3. 有进位，且处理溢出
+#### 3. 有进位，且处理溢出
 ```cpp
 ALWAYS_INLINE id 
 objc_object::rootRetain(bool tryRetain, bool handleOverflow)
@@ -357,7 +359,7 @@ objc_object::sidetable_addExtraRC_nolock(size_t delta_rc)
 
 如果这时出现了溢出，那么就会撤销这次的行为。否则，会将新的引用计数存储到 refcntStorage 指针中。
 
-###4. 其他情况
+### 4. 其他情况
 ```cpp
 //没有开启isa优化
 if (slowpath(!newisa.nonpointer)) {
@@ -399,7 +401,7 @@ ALWAYS_INLINE bool objc_object::rootRelease() {
 ```
 `release`实例方法实际上是调用`rootRelease`函数进行实现的。`rootRelease`的实现代码比较长，这里稍微简化一下进行分析。
 
-###1.无借位
+### 1.无借位
 ```cpp
 ALWAYS_INLINE bool 
 objc_object::rootRelease(bool performDealloc, bool handleUnderflow)
@@ -424,7 +426,7 @@ objc_object::rootRelease(bool performDealloc, bool handleUnderflow)
 
 使用`LoadExclusive`获得isa，然后调用`subc`函数将isa中的`extra_rc`引用计数减一，最后调用`StoreReleaseExclusive`对isa进行更新。
 
-### 从SideTable借位
+### 2.从SideTable借位
 ```cpp
 ALWAYS_INLINE bool 
 objc_object::rootRelease(bool performDealloc, bool handleUnderflow)
@@ -531,7 +533,7 @@ if (performDealloc) { //传参performDealloc=true，发送dealloc消息
 ```
 调用`sidetable_release`函数，直接对SideTable中存储的对象的引用计数进行操作。
 
-```
+```cpp
 uintptr_t
 objc_object::sidetable_release(bool performDealloc)
 {
