@@ -695,7 +695,7 @@ class_addMethod(Class _Nullable cls, SEL _Nonnull name, IMP _Nonnull imp, const 
 - cls：需要添加方法的类
 - name：方法选择子，指定添加的方法的名字
 - imp：新方法的实现c函数，IMP类型，根据定义`typedef void (*IMP)(void /* id, SEL, ... */ )`，函数必须包含两个参数，一个是`id self`，另一个是`SEL _cmd`，这两个参数在oc方法中是隐藏参数，默认存在的。
-- types：返回值和参数的类型，和“类型编码”相关的信息可以google一下。
+- types：返回值和参数的类型，和“类型编码”相关的信息可以google一下。可以用`method_getTypeEncoding`函数来获得Method对应的类型编码。
 
 如果待添加的是oc方法，可以通过`method_getImplementation`获取方法的IMP，`method_getTypeEncoding`获取方法的类型编码。
 
@@ -935,6 +935,19 @@ ps:`[self class]` \ `object_getClass(self)` \ `object_getClass([self class])` �
 1.self是实例对象。`[self class]` = `object_getClass(self)`，`object_getClass([self class])` 得到元类。
 
 2.self是类对象，`[self class]`得到自身，`object_getClass(self)` = `object_getClass([self class])`得到元类。
+
+###不想进行动态绑定
+可以直接获取方法的指针，并转化成相应的函数类型，通过指针进而调用代码，就可以跳过上面一系列消息发送、转发的流程。适用于for循环频繁调用同一方法，提高性能。
+
+```
+void (*setter)(id, SEL, BOOL);
+int i;
+setter = (void (*)(id, SEL, BOOL))[target methodForSelector:@selector(setField:)];
+
+for (i = 0; i < 1000; ++i) {
+	setter(targetList[i], @selector(setField:), YES);
+}
+```
 
 ## 参考文章：
 
