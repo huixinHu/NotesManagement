@@ -1,6 +1,6 @@
 《Objective-C高级编程》这本书就讲了三个东西：自动引用计数、block、GCD，偏向于从原理上对这些内容进行讲解而且涉及到一些比较底层的实现，再加上因为中文翻译以及内容条理性等方面的原因，书本有些内容比较晦涩难懂，在初初读的时候一脸懵逼。本文是对书中block一章的内容做的一些笔记，所以侧重的是讲原理，同时也会对书中讲得晦涩或不合理的地方相对进行一些补充和扩展。
 
-#1.Block结构与实质
+# 1.Block结构与实质
 使用Block的时候，编译器对Block做了怎样的转换？分析工具clang
 
 例1
@@ -160,7 +160,7 @@ variables：block捕获的变量，block 能够访问它外部的局部变量，
 
 在objc中，根据对象的定义，凡是首地址是isa的结构体指针，都可以认为是对象(id)。**这样在objc中，block实际上就算是对象。**
 
-#2.截获外部变量
+# 2.截获外部变量
 外部变量有四种类型：自动变量、静态变量、静态全局变量、全局变量。我们知道，如果不使用`__block` 就无法在block中修改自动变量的值。
 
 那么block是怎么截获外部变量的呢？测试代码：
@@ -467,11 +467,11 @@ void(^blk_t)();
 例3的代码会跑出这样的结果，猜测和runloop休眠、唤醒之间释放自动释放池有关。
 
 
-#3.block的存储域以及内存管理
-##3.1存储域
+# 3.block的存储域以及内存管理
+## 3.1存储域
 一般，block有三种：`_NSConcreteGlobalBlock`、`_NSConcreteStackBlock`、`_NSConcreteMallocBlock`，根据Block对象创建时所处数据区不同而进行区别。
 
-##_NSConcreteGlobalBlock
+## _NSConcreteGlobalBlock
 是设置在程序的全局数据区域（.data区）中的Block对象。在全局声明实现的block 或者 没有用到自动变量的block为`_NSConcreteGlobalBlock`，生命周期从创建到应用程序结束。
 
 - 全局block：
@@ -526,7 +526,7 @@ void(^blk_t)();
   
   然而，从clang编译结果来看，这两个block的isa的指针值都是_NSConcreteStackBlock。
 
-##`_NSConcreteStackBlock`和`_NSConcreteMallocBlock`
+## `_NSConcreteStackBlock`和`_NSConcreteMallocBlock`
 
 `_NSConcreteStackBlock`是设置在栈上的block对象，生命周期由系统控制的，一旦所属作用域结束，就被系统销毁了。
 
@@ -591,7 +591,7 @@ MRC运行结果：
 __NSMallocBlock__
 ```
 
-##3.2block的自动拷贝和手动拷贝
+## 3.2block的自动拷贝和手动拷贝
 在ARC有效时，大多数情况下编译器会进行判断，自动生成将Block从栈上复制到堆上的代码，以下几种情况栈上的Block会自动复制到堆上：
 
 - 调用Block的copy方法
@@ -658,8 +658,8 @@ int main(int argc, char * argv[]) {
 
 最后。ARC会自动处理block的内存，不用手动release，但MRC下需要，否则会内存泄漏。
 
-##3.3block的copy和release
-###copy
+## 3.3block的copy和release
+### copy
 block的复制可以使用，`Block_copy()`函数又或者copy实例方法。
 `Block_copy()`的实现。在[Block.h](https://opensource.apple.com/source/clang/clang-137/src/projects/compiler-rt/BlocksRuntime/Block.h)文件中看到(在Xcode中也可以找到)：
 
@@ -732,7 +732,7 @@ static void *_Block_copy_internal(const void *arg, const int flags) {
 
 不管block配置在哪里，调用copy方法进行复制不会产生任何问题。根据实际情况需要决定是否调用copy，如果在所有情况下都进行复制是不可取的做法，这样会浪费cpu资源。
 
-###release
+### release
 同样地，block的释放可以使用`Block_release()`函数或者release方法。
 
 ```cpp
@@ -776,10 +776,11 @@ void _Block_release(void *arg) {
 
 `_Block_copy_internal()`第9步和`_Block_release()`第4步中，block所持有对象的内存管理相关内容之后再详细说明。
 
-#4.__block说明符
+# 4.__block说明符
 回顾在第二节中截获自动变量值的例子。block在实现时捕获自动变量的瞬时值，而且不允许在block内修改；因为超出栈作用域就会被释放的原因，也无法用指针传递的方式来实现在block内修改自动变量。
 
 我们知道使用__block 修饰自动变量就可以在block内改变外部自动变量的值。那__block又是怎样实现这个目的的呢？以下分为基本数据类型、对象类型的指针变量来说明。
+
 ##4.1基本数据类型的变量
 例5：
 
@@ -932,7 +933,7 @@ __Block_byref_c_0 *c = __cself->c; // bound by ref
 2. __forwarding初始化为指向自身的指针，为什么要通过它来取得我们要修改的变量而不是`c->c`直接取出呢？
 
 
-##__block变量的内存管理 - copy和release
+## __block变量的内存管理 - copy和release
 ```c
 //dst：目标地址 src：源地址
 static void __main_block_copy_0(struct __main_block_impl_0*dst, struct __main_block_impl_0*src) {_Block_object_assign((void*)&dst->c, (void*)src->c, 8/*BLOCK_FIELD_IS_BYREF*/);}
@@ -981,7 +982,7 @@ void (*dispose)(struct __main_block_impl_0*);
 至于release的过程，就相当于copy的逆过程，很好理解就不多说了。
 
 
-###block持有对象
+### block持有对象
 另外，回顾第二节中的例2，block中使用到（默认）附有__strong修饰符的NSMutableString类对象的自动变量`NSMutableString *str = [[NSMutableString alloc]initWithString:@"hello"];`。转换源码之后，同样地多了`__main_block_copy_0 `和`__main_block_dispose_0 `函数。
 
 > 因为在C语言的结构体中，编译器没法很好的进行初始化和销毁操作。这样对内存管理来说是很不方便的。所以就在 `__main_block_desc_0`结构体中间增加成员变量 `void (\*copy)(struct __main_block_impl_0\*, struct __main_block_impl_0\*)`和`void (\*dispose)(struct __main_block_impl_0\*)`，利用OC的Runtime进行内存管理。
@@ -992,7 +993,7 @@ void (*dispose)(struct __main_block_impl_0*);
 
 `_Block_object_assign`函数的调用相当于把对象retain了，因此block持有对象。
 
-##4.2对象类型的指针变量
+## 4.2对象类型的指针变量
 ```objective-c
 __block NSObject *obj = [[NSObject alloc]init];
     NSLog(@"----%@,%p",obj,&obj);
@@ -1073,7 +1074,7 @@ __block __strong NSObject *obj = [[NSObject alloc]init];
 只要堆上的__block变量存在，对象就继续处于被持有的状态。
 ```
 
-###总结一下以上4个章节：
+### 总结一下以上4个章节：
 - **捕获**和**持有**是两个概念，不要混淆。（**持有**是MRC下的说法，而在ARC下的内存管理我们谈的是“强弱指针引用”。）
 - block相当于是对象。
 - 能够被block捕获的变量：自动变量、静态变量、`__block`变量。block捕获：自动变量的值（基本数据类型-值，对象类型指针-对象地址）；静态变量的地址；`__block`变量则是其对应结构体变量的指针：地址。
@@ -1093,7 +1094,7 @@ __block __strong 对象类型变量： 堆Block -> 堆__block变量 -> 对象
 ```
 - 在ARC下，`__block`会导致对象被retain。而在MRC下不会。
 
-#5.循环引用
+# 5.循环引用
 循环引用是什么其实很多人应该都知道，这里简单提一下。比如说：
 1.多个对象之间相互引用形成环。A对象强引用B，B强引用A，于是两者内存一直无法释放。
 2.对象自己引用自己。
@@ -1220,7 +1221,7 @@ self也是对象，所以block捕获它的时候也会持有该对象。
 
 ![2.自己引用自己](http://upload-images.jianshu.io/upload_images/1727123-8e3a01c27bcc5b9c.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
 
-##5.1解除循环引用
+## 5.1解除循环引用
 以例6为例分析：
 
 ![](http://upload-images.jianshu.io/upload_images/1727123-78720f9ed3ac385d.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
