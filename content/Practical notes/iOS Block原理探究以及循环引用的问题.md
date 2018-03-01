@@ -781,7 +781,7 @@ void _Block_release(void *arg) {
 
 我们知道使用__block 修饰自动变量就可以在block内改变外部自动变量的值。那__block又是怎样实现这个目的的呢？以下分为基本数据类型、对象类型的指针变量来说明。
 
-##4.1基本数据类型的变量
+## 4.1基本数据类型的变量
 例5：
 
 ```objective-c
@@ -987,7 +987,7 @@ void (*dispose)(struct __main_block_impl_0*);
 
 > 因为在C语言的结构体中，编译器没法很好的进行初始化和销毁操作。这样对内存管理来说是很不方便的。所以就在 `__main_block_desc_0`结构体中间增加成员变量 `void (\*copy)(struct __main_block_impl_0\*, struct __main_block_impl_0\*)`和`void (\*dispose)(struct __main_block_impl_0\*)`，利用OC的Runtime进行内存管理。
 
-与`__block`相似，**对象类型的指针变量被block截获值（地址），而block被复制到堆上后持有这个对象**，因此，它可以超出作用域而存在。当堆上block被废弃时，释放block持有的对象（不是持有变量）。指针指向的对象并不会随block的复制而复制到堆上。
+与`__block`相似，**对象类型的指针变量被block截获值（地址），而block被复制到堆上后持有这个对象**，因此，它可以超出作用域而存在。当堆上block被废弃时，释放block持有的对象。指针指向的对象并不会随block的复制而复制到堆上。
 
 ![](http://upload-images.jianshu.io/upload_images/1727123-df2541419ae2ff8c.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
 
@@ -1075,7 +1075,7 @@ __block __strong NSObject *obj = [[NSObject alloc]init];
 ```
 
 ### 总结一下以上4个章节：
-- **捕获**和**持有**是两个概念，不要混淆。（**持有**是MRC下的说法，而在ARC下的内存管理我们谈的是“强弱指针引用”。）
+
 - block相当于是对象。
 - 能够被block捕获的变量：自动变量、静态变量、`__block`变量。block捕获：自动变量的值（基本数据类型-值，对象类型指针-对象地址）；静态变量的地址；`__block`变量则是其对应结构体变量的指针：地址。
 - 自动变量是值传递，所以不能在block内改变值。

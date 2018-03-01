@@ -280,7 +280,11 @@ A界面 push进入B界面，在B中创建子线程，子线程中创建timer、�
 
 这段代码在iOS10、iOS9环境下运行结果不太一样。
 
+iOS9
+
 ![iOS9](http://upload-images.jianshu.io/upload_images/1727123-f391ae5aa1ae8692.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+
+iOS10
 
 ![iOS10](http://upload-images.jianshu.io/upload_images/1727123-0350c135315d7541.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
 
