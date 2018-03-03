@@ -63,7 +63,7 @@ typedef void (*IMP)(void /* id, SEL, ... */ );
 
 IMP实际上是一个函数指针，它指向了方法的实现。
 
-###Method
+### Method
 
 ```cpp
 typedef struct method_t *Method;
