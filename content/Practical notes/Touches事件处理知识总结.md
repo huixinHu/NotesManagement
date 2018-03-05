@@ -5,7 +5,7 @@ iOS中有三类事件：UIEventTypeTouches触摸事件、 UIEventTypeMotion “�
 
 响应者对象：不过在ios中不是任何对象都可以处理事件，只有继承了UIResponder的对象才能**接收**、**处理**事件，比如UIApplication、UIViewController、UIView、UIWindow。
 
-#触摸事件
+# 触摸事件
 UIView是UIResponder的子类。UIResponder有以下四个方法处理触摸事件，UIView可以重写这些方法去自定义事件处理。
 
 ```objective-c
@@ -24,7 +24,7 @@ UIView是UIResponder的子类。UIResponder有以下四个方法处理触摸事�
 
 对于这四个触摸事件处理方法的参数的说明：
 
-- **第一个参数：(NSSet *)touches**
+- **第一个参数：`(NSSet *)touches`**
 
 NSSet和 NSArray类似,但NSSet的区别在：
 
@@ -57,7 +57,7 @@ UITouch保存着跟本次手指触摸相关的信息，比如触摸的位置、�
 
 ```-(CGPoint)previousLocationInView:(UIView*)view;```前一个触摸点的位置,参数同上
 
-- **第二个参数(UIEvent*)event**
+- **第二个参数`(UIEvent *)event`**
 
 每产生一个事件，就会产生一个UIEvent对象，UIEvent保存事件产生的事件和类型。UIEvent还提供了相应的方法可以获得在某个view上面的UITouch触摸对象。
 
@@ -155,7 +155,7 @@ runloop
 3. vc的nextResponder会被指向self.view的superView。
 4. 最顶级的vc的nextResponder指向UIWindow。
 5. UIWindow的nextResponder指向UIApplication
-6. 
+
 这就形成了响应链。并没有一个对象来专门存储这样的一条链，而是通过UIResponder的串连起来的。
 
 对于touches方法的描述：
