@@ -1,9 +1,9 @@
 [作者设计思路](https://blog.ibireme.com/2015/10/26/yycache/)
 
-#1.YYMemoryCache
+# 1.YYMemoryCache
 `YYMemoryCache`负责管理内存缓存。这个类是线程安全的。
 
-###LRU算法的实现
+### LRU算法的实现
 用双向链表和 CFMutableDictionary 实现。存储单元是`_YYLinkedMapNode`（相当于链表结点）。
 
 ```objective-c
@@ -47,7 +47,7 @@ Node的value值就是要存储的数据对象；CFMutableDictionary字典的valu
 - 删除结点
 都是一些比较简单的链表知识，应该很容易就能看懂，所以就不展开谈了。
 
-###YYMemoryCache的内部实现
+### YYMemoryCache的内部实现
 成员变量：
 
 ```objective-c
@@ -221,7 +221,7 @@ _trimToCost和_trimToAge方法的实现大致类似，就不展开谈了。
 }
 ```
 
-##2.YYKVStorage
+## 2.YYKVStorage
 在YYCache中，YYDiskCache负责管理磁盘缓存，而他的核心功能类是YYKVStorage，通过文件+sqlite数据库的方式缓存数据。但YYKVStorage不是线程安全的，YYDiskCache线程安全，作者建议不要直接使用YYKVStorage。
 
 三种数据缓存策略
@@ -239,7 +239,7 @@ typedef NS_ENUM(NSUInteger, YYKVStorageType) {
 };
 ```
 
-####初始化方法：
+#### 初始化方法：
 指定数据缓存方式，创建了缓存文件夹、sqlite数据库，打开并初始化数据库。
 
 ```objective-c
@@ -435,7 +435,7 @@ YY中封装的checkpoint方法：
 
 完成释放`_dbStmtCache`字典、关闭数据库的功能。如果有未释放的编译过的语句（`sqlite3_close`也会返回SQLITE_BUSY），就逐个把编译过的sql语句用`sqlite3_finalize()`函数释放掉。
 
-####缓存数据的增删查改
+#### 缓存数据的增删查改
 YYKVStorageItem：
 
 ```objective-c
@@ -575,10 +575,10 @@ if (fileName.length == 0) {
 
 触类旁通，至于查找和修改数据的方法，大多都是类似的数据库、文件读写方法，把握好了一个思路，其实看起来都是差不多的，在这里就不展开了讲了。
 
-##3.YYDiskCache
+## 3.YYDiskCache
 YYDiskCache是YYKVStorage的线程安全封装，与YYMemoryCache类似，实现了LRU淘汰算法。
 
-####初始化
+#### 初始化
 ```objective-c
 - (instancetype)initWithPath:(NSString *)path {
     return [self initWithPath:path inlineThreshold:1024 * 20]; // 20KB
@@ -694,7 +694,7 @@ LRU淘汰，**基于 SQLite 存储的元数据**。与YYMemoryCache中的实现�
 }
 ```
 
-####写缓存
+#### 写缓存
 ```objective-c
 //添加缓存
 - (void)setObject:(id<NSCoding>)object forKey:(NSString *)key {
@@ -733,12 +733,12 @@ LRU淘汰，**基于 SQLite 存储的元数据**。与YYMemoryCache中的实现�
 传入缓存对象和key。先对对象进行归档，转成二进制数据，如果有自定义的归档方法就用，否则就用系统默认的归档方法。
 判断缓存策略type，如果是数据库缓存，就直接调用`-saveItemWithKey: value: filename: extendedData:`将数据写入数据库，filename=nil。如果是另外两种缓存策略，判断数据是否超过threshold阈值（如果是文件缓存策略，作者已经写死只有threshold=0才是文件缓存；默认是混合缓存，阈值20K），超阈值就将数据写入文件。
 
-####读缓存
+#### 读缓存
 `- (id<NSCoding>)objectForKey:(NSString *)key`，先使用YYKVStorage 的`getItemForKey:`方法得到key对应YYKVStorageItem对象，然后再解档item.value得到原来的缓存对象。
 
 还有一些删除缓存、异步回调的方法，比较简单，这里也不多说了。
 
-##4.最后
+## 4.最后
 用过阅读YY源码，学习到了很多，LRU算法的实现(内存缓存基于用双向链表和 CFMutableDictionary 实现，磁盘缓存基于基于 SQLite 存储的元数据)、SQLite封装、线程安全等等，特别是性能优化问题上，代码中更是处处有体现，像作者这样的大神，技术真是让我敬佩。
 
 
