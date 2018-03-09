@@ -33,7 +33,7 @@ Quartz2D提供了以下几种类型的图形上下文：Bitmap Graphics Context�
 
 那如果要在drawRect以外的地方获取图形上下文怎么办？那就只能自己创建位图上下文了。`UIGraphicsBeginImageContextWithOptions`
 
-###绘制基本图形
+### 绘制基本图形
 两种绘图方式：
 
 - 方式一：直接调用Quartz2D 的 API 
