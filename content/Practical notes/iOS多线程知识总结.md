@@ -799,7 +799,7 @@ NSOperation之间可以设置依赖来保证执行顺序。`[op1 addDependency:o
 
 ![](http://upload-images.jianshu.io/upload_images/1727123-b40b94971d6085da.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
 
- **解决方法：**使用互斥锁（同步锁）
+ **解决方法：** 使用互斥锁（同步锁）
 
  **格式：**`@synchronized(锁对象){需要锁定的代码}`
 
