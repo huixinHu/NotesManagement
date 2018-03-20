@@ -99,6 +99,7 @@ struct objc_class : objc_object {
 类方法调用时，通过类的isa“指针”在元类中获取方法的实现。元类中存储了一个类的所有类方法。
 
 从上图中总结以下几个信息：
+
 - root class(class)就是NSObject，由于它是基类，所以它没有父类。
 - 实例对象的isa指向其类，类的isa指向其元类。每个元类的isa都指向根元类root class(meta)，根元类的isa指向自己。
 - 根元类的父类指针指向基类（NSObject）。
@@ -548,6 +549,7 @@ class list_array_tt {
 }
 ```
 list_array_tt 存储一些元数据，是通过c++模板定义的容器类，提供了一些诸如count、迭代器iterator的方法和类。Element表示元数据的类型，比如 method_t 、 property_t 、 protocol_ref_t；List表示存储元数据的容器，理解成是用于存储元数据的一维数组，比如 method_list_t 、 property_list_t 。由于list_array_tt 存储了List指针数组，所以list_array_tt实际上可以看做是元数据的二维数组。list_array_tt 有三种状态：
+
 - 自身为空
 - List指针数组只有一个指向元数据数组的指针
 - List指针数组有多个指针
@@ -662,12 +664,14 @@ if (ro->flags & RO_FUTURE) {
 }
 ```
 这里主要做了几个事：
+
 - 调用 object_class 的 data 方法，把得到的 class_rw_t 指针强制转换成 class_ro_t 指针。
 - 新初始化一个 class_rw_t ，分配可读写数据空间。
 - 将 class_ro_t 指针赋值给 class_rw_t->ro ，并设置 class_rw_t->flag 。
 - 设置 object_class 的正确 data 。
 
 也即由以下图1变成了图2：图片来源[深入解析 ObjC 中方法的结构](https://github.com/Draveness/analyze/blob/master/contents/objc/深入解析%20ObjC%20中方法的结构.md)
+
 ![](../image/objc-method-before-realize.png)
 ![](../image/objc-method-after-realize-class.png)
 
@@ -696,7 +700,7 @@ if (protolist) {
 
 总结：
 
-- 编译器，类的相关方法、属性、实例变量、协议会被添加到class_ro_t这个只读结构体中。
+- 编译期，类的相关方法、属性、实例变量、协议会被添加到class_ro_t这个只读结构体中。
 - 运行期，类第一次被调用时，class_rw_t会被初始化。
 
 ## 5.验证一下
@@ -734,6 +738,7 @@ int main(int argc, const char * argv[]) {
 由于类在内存中的位置是编译期就确定的，在之后修改代码，也不会改变内存中的位置。所以先跑一次代码获取XXObject 在内存中的地址。地址为：0x1000011e0
 
 在运行时初始化之前加入断点：
+
 ![](../image/Snip20180129_1.png)
 
 然后通过lldb验证一下：
@@ -848,7 +853,7 @@ warning: could not find Objective-C class data in the process. This may reduce t
 
 关于`"v16@0:8"`、`"d16@0:8"`、`"v24@0:8d16"` 请见[Type Encoding](https://developer.apple.com/library/mac/DOCUMENTATION/Cocoa/Conceptual/ObjCRuntimeGuide/Articles/ocrtTypeEncodings.html)
 
-以上这些都是在编译器就生成了的。
+以上这些都是在编译期就生成了的。
 
 接着来看一下如果没有把class_rw_t强转成class_ro_t时的情形：先打印出来留到后面与初始化之后进行对比。
 

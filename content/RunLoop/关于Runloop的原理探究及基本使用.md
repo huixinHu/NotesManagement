@@ -103,7 +103,9 @@ cancelPreviousPerformRequestsWithTarget:selector:object:
 
 1.2 wait参数为NO，selector源添加到runloop且执行完不会自动清除出runloop。
 
-**如果调用线程和指定线程不是同一线程:**selector源添加到runloop且执行完不会自动清除出runloop。
+**如果调用线程和指定线程不是同一线程:**
+
+selector源添加到runloop且执行完不会自动清除出runloop。
 
 2. 而`performSelector:withObject:afterDelay`则不是source0而是timer，使用是添加到runloop，执行完会自动移除出runloop。
 
@@ -136,7 +138,7 @@ C、 observer
 
 CFRunLoopObserverRef观察者，监听runloop的状态。通过回调接收状态变化。它不属于runloop的事件源。
 
-```
+```c
 typedef CF_OPTIONS(CFOptionFlags, CFRunLoopActivity) {
     kCFRunLoopEntry         = (1UL << 0), // 即将进入Loop
     kCFRunLoopBeforeTimers  = (1UL << 1), // 即将处理 Timer
@@ -149,7 +151,7 @@ typedef CF_OPTIONS(CFOptionFlags, CFRunLoopActivity) {
 
 Mode 暴露的管理 mode item 的接口有下面几个：
 
-```
+```objective-c
 CFRunLoopAddSource(CFRunLoopRef rl, CFRunLoopSourceRef source, CFStringRef modeName);
 CFRunLoopAddObserver(CFRunLoopRef rl, CFRunLoopObserverRef observer, CFStringRef modeName);
 CFRunLoopAddTimer(CFRunLoopRef rl, CFRunLoopTimerRef timer, CFStringRef mode);
@@ -211,7 +213,7 @@ CFRunLoopModeRef。每次启动RunLoop时，只能指定其中一个 Mode，这�
 
 CFRunLoop对外暴露的管理 Mode 接口只有下面2个:
 
-```
+```cpp
 CFRunLoopAddCommonMode(CFRunLoopRef runloop, CFStringRef modeName);
 CFRunLoopRunInMode(CFStringRef modeName, ...);
 ```
@@ -277,7 +279,7 @@ SInt32 CFRunLoopRunSpecific(CFRunLoopRef rl, CFStringRef modeName, CFTimeInterva
 }
 ```
 
-```
+```cpp
 static int32_t __CFRunLoopRun(CFRunLoopRef rl, CFRunLoopModeRef rlm, CFTimeInterval seconds, Boolean stopAfterHandle, CFRunLoopModeRef previousMode) {
     uint64_t startTSR = mach_absolute_time();//获取系统启动之后 的内核时间
 

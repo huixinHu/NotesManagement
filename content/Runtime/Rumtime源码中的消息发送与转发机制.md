@@ -856,8 +856,8 @@ int main(int argc, const char * argv[]) {
 
 虽然在方法的定义中没有明确声明这两个参数，但是我们仍然可以在方法中引用它们。
 
-### 获取方法地址
-`IMP` 这个函数指针指向了方法的实现。既然得到了执行某个实例某个方法的入口，我们就可以绕开消息传递阶段，直接执行方法。但是一般我们很少这样做。
+### 获取方法地址（不想进行动态绑定）
+`IMP` 这个函数指针指向了方法的实现。既然得到了执行某个实例某个方法的入口，我们就可以绕开消息传递阶段，直接执行方法。但是一般我们很少这样做。（适用于for循环频繁调用同一方法，提高性能。）
 
 NSObject类中有个methodForSelector:实例方法（也有同名类方法），可以用来获取某个方法选择子对应的IMP。
 
@@ -936,18 +936,7 @@ ps:`[self class]` \ `object_getClass(self)` \ `object_getClass([self class])` �
 
 2.self是类对象，`[self class]`得到自身，`object_getClass(self)` = `object_getClass([self class])`得到元类。
 
-###不想进行动态绑定
-可以直接获取方法的指针，并转化成相应的函数类型，通过指针进而调用代码，就可以跳过上面一系列消息发送、转发的流程。适用于for循环频繁调用同一方法，提高性能。
 
-```
-void (*setter)(id, SEL, BOOL);
-int i;
-setter = (void (*)(id, SEL, BOOL))[target methodForSelector:@selector(setField:)];
-
-for (i = 0; i < 1000; ++i) {
-	setter(targetList[i], @selector(setField:), YES);
-}
-```
 
 ## 参考文章：
 
