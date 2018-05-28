@@ -97,15 +97,15 @@ cancelPreviousPerformRequestsWithTarget:selector:object:
 
 1. 对于`onMainThread`和`onthread`这两种情况，创建的是source0任务。
 
-**如果调用线程和指定线程为同一线程:**
+ **如果调用线程和指定线程为同一线程:**
 
-1.1 wait参数设为YES（阻塞当前线程直到selector执行完），那么aSelector会直接在指定线程运行，不会添加到runloop。（其实就有点类似于线程死锁）
+ 1.1 wait参数设为YES（阻塞当前线程直到selector执行完），那么aSelector会直接在指定线程运行，不会添加到runloop。（其实就有点类似于线程死锁）
 
-1.2 wait参数为NO，selector源添加到runloop且执行完不会自动清除出runloop。
+ 1.2 wait参数为NO，selector源添加到runloop且执行完不会自动清除出runloop。
 
-**如果调用线程和指定线程不是同一线程:**
+ **如果调用线程和指定线程不是同一线程:**
 
-selector源添加到runloop且执行完不会自动清除出runloop。
+ selector源添加到runloop且执行完不会自动清除出runloop。
 
 2. 而`performSelector:withObject:afterDelay`则不是source0而是timer，使用是添加到runloop，执行完会自动移除出runloop。
 
