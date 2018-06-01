@@ -1,93 +1,7 @@
-### 三、object.h 基本数据结构
 
-枚举`msgpack_object_type`对象类型：nil、boolean、正整数、负整数、double、raw（其实就是string）、array、map。
+# 一、序列化
 
-```c
-typedef enum {
-	MSGPACK_OBJECT_NIL					= 0x00,
-	MSGPACK_OBJECT_BOOLEAN				= 0x01,
-	MSGPACK_OBJECT_POSITIVE_INTEGER		= 0x02,
-	MSGPACK_OBJECT_NEGATIVE_INTEGER		= 0x03,
-	MSGPACK_OBJECT_DOUBLE				= 0x04,
-	MSGPACK_OBJECT_RAW					= 0x05,
-	MSGPACK_OBJECT_ARRAY				= 0x06,
-	MSGPACK_OBJECT_MAP					= 0x07,
-} msgpack_object_type;
-```
-
-所有原始数据经过“包装”之后会变成以下`msgpack_object`数据结构：
-
-1. 对象
-
- ```c
-typedef struct msgpack_object {
-	msgpack_object_type type;//对象类型
-	msgpack_object_union via;//数据实体
-} msgpack_object;
-```
-
-2. 对象数据实体
-
- ```c
-//这是一个联合体
-typedef union {
-	bool boolean;
-	uint64_t u64;
-	int64_t  i64;
-	double   dec;
-	msgpack_object_array array;
-	msgpack_object_map map;
-	msgpack_object_raw raw;
-} msgpack_object_union;
-```
-
-3. 数组
-
- ```c
-typedef struct {
-	uint32_t size;				//大小
-	struct msgpack_object* ptr;	//数组元素（对象）
-} msgpack_object_array;
-```
-
-4. 字典
-
- ```c
-typedef struct {
-	uint32_t size;					//大小
-	struct msgpack_object_kv* ptr;	//字典元素-对象键值对
-} msgpack_object_map;
-```
-
-5. 键值对
-
- ```c
-typedef struct msgpack_object_kv {
-	msgpack_object key;	//键
-	msgpack_object val;	//值
-} msgpack_object_kv;
-```
-
-6. rawData
-
- ```c
-typedef struct {
-	uint32_t size; 	//大小
-	const char* ptr;	//字符数组
-} msgpack_object_raw;
-```
-
-### 四、object.c
-
-`int msgpack_pack_object(msgpack_packer* pk, msgpack_object d)`函数。对经包装的数据对象`msgpack_object`进行序列化，返回值-1表示不成功，0为成功。
-
-`void msgpack_object_print(FILE* out, msgpack_object o)`函数，打印数据对象的信息。
-
-`bool msgpack_object_equal(const msgpack_object x, const msgpack_object y)`函数，判断两个对象是否相等
-
-
-# 六、序列化入口
-MessagePackPacker类
+入口MessagePackPacker类。
 
 ```objective-c
 + (NSData*)pack:(id)obj {
@@ -183,7 +97,6 @@ static inline int msgpack_sbuffer_write(void* data, const char* buf, unsigned in
 	return 0;
 }
 ```
-
 
 ## 3.序列化
 
@@ -327,7 +240,7 @@ do { \
 
  `2^32 <= d < 2^64`，序列化用九个字节，第一个字节固定TAG为0xcf，后八个字节表示数。
 
- 从源码来看，8、16、32、64bit uint序列化分开了几个函数，里面逻辑的重复度挺高的，但是估计是考虑到大小端字节序的问题，所以还是不得不拆成几个函数来写。另外，在小端模式下`_msgpack_store16`、`_msgpack_store32`、`_msgpack_store64`这几个函数用来将数据进行字节逆序（**变成大端模式的表达**）。
+ 从源码来看，8、16、32、64bit uint序列化分开了几个函数，里面逻辑的重复度挺高的，但是估计是考虑到大小端字节序的问题，所以还是不得不拆成几个函数来写。另外，在小端模式下`_msgpack_store16`、`_msgpack_store32`、`_msgpack_store64`这几个函数用来将数据进行字节逆序。
 
 3. 有符号整数
  
@@ -420,3 +333,48 @@ for(id key in obj) {
 ### 3.4 Raw（string）类型序列化
 
 格式：TAG + Length + Value。Value部分记得要用大端字节序。
+
+## 4.把数据转换为二进制格式
+
+`NSData* data = [NSData dataWithBytes:buffer->data length:buffer->size];`
+
+## 5.释放资源
+
+```c
+msgpack_sbuffer_free(buffer);
+msgpack_packer_free(pk);
+```
+
+# 二、反序列化
+之前写过一个json解析器的代码，然后看了msgPack反序列化的代码，发现思路基本上都差不多...使用流的方式，解析器从头扫描一次字符串，就能完整解析出对应的数据结构。无论是Json解析还是msgPack解析，本质上，这类解析器就是一个**状态机**，根据定义好的格式，就能实现状态转移。
+
+解析的过程包括词法分析和语法分析两个部分，词法分析就是按照构词规则将字符串解析成TOKEN流。得到TOKEN后，就进行语法分析，检查这些TOKEN序列构成的msgPack字节流结构是否合法。
+
+比如masPack是由一系列`TAG`+`Length`+`Value`构成的，那么TAG就可以是TOKEN。在代码具体实现中，Length并没有作为TOKEN（读到TAG后，根据TAG分析Length占多少字节，然后解析出Length的值l，然后数据流直接向前移动l字节开始解析Value）。在msgPack源码中TOKEN定义在`unpack_define.h`文件中。
+
+有了TOKEN还不行，我们还需要将某个元素的字面量保存起来，所以还要定义一个包装对象结构体：
+
+```c
+typedef struct msgpack_object {
+	msgpack_object_type type;//类型 
+	msgpack_object_union via;//数据
+} msgpack_object;
+```
+
+具体的源码是不会逐句逐句分析的，因为解析原理很好懂，就是一个状态机。核心解析函数是`unpack_template.h`文件中的`template_excute`。
+
+另外有一点，觉得msgPack的TAG设计真的挺巧妙的。所有的TAG用1字节（或者几个bit）表示，比较特殊的几种：
+
+```
+format name 		first byte (in binary)
+positive fixint		0xxxxxxx	
+fixmap				1000xxxx	
+fixarray			1001xxxx	
+fixstr				101xxxxx	
+negative fixint		111xxxxx //结合：计算机中负数的二进制表示
+```
+
+其余的TAG都是`110xxxxx`，每一个TAG都不是其他TAG的前缀，这种设计使得TAG和后面的数据很容易分离出来。原本我以为TAG的后5个bit是随意取的，只要不重复就行。实际上，以`T-L-V`格式组成序列化的元素，表达`L`所需的字节长度就设计在这5个bit中。比如float32元素，TAG = 0xca，通过运算：`1 << (TAG & 0x03)`可以得到Length部分的长度是4字节。TAG = 0xca~0xd3都可以用`1 << (TAG & 0x03)`得到Length部分的长度，而TAG = 0xda~0xdf用`2 << (TAG & 0x01)`得到Length的长度。
+
+槽点：代码使用了很多宏，夹杂着goto语句，而且有一些无用代码，虽然核心代码是写得简洁了但是看得略难受...
+
