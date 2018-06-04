@@ -292,6 +292,12 @@ flase 0xc2，true 0xc3。
 
 格式：TAG + Length（数组长度） + Value。Value部分由每个元素的TAG -（Length）-（Value）组成。
 
+```
+T-L | T-L-V | T-L-V | T-L-V ....
+     ----------------------
+      value部分，为便于阅读用'|'表示分割字典元素。每个元素都是T-L-V
+```
+
 `+ (void)packObject:(id)obj into:(msgpack_packer*)pk`方法中数组序列化部分的代码：
 
 ```objective-c
