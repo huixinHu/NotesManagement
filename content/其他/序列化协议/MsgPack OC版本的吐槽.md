@@ -2,7 +2,7 @@ msgPack本身设计上还有很多可以优化的点，然而这个库实在是�
 
 OC版本只支持NSArray、NSDictionary的序列化。比如如果我只是想序列化一个数字，还得先把它放到一个NSArray里面才能序列化。
 
-不支持NSData的序列化，也即官方raw data binary format类型的数据（依我的理解，当然也可能是我没找到正确的序列化方法，OC版本的使用文档真的非常少..）。
+不支持NSData的序列化，也即官方raw data binary format类型的数据（当然也可能是我没找到正确的序列化方法，OC版本的使用文档真的非常少..）。
 
 根据网上搜集来的信息：如果需要序列化的信息包含大量的字符串，那么msgPack、ProtocolBuffer、FlatBuffers序列化后数据大小相差并不大，因为msgPack和pb对字符串都没有压缩（不了解FlatBuffers所以先不谈）。如果序列化信息中数字较多，那么Pb将会展现出优势。
 
