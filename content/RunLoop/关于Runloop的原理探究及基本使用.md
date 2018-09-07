@@ -40,9 +40,9 @@ runloop是不能够通过`alloc init`来创建。要获取runloop可以通过这
 
 由苹果源码，这两个函数的内部实现看出线程和runloop是一一对应的，这种对应关系用一个字典保存起来，key是pthread，value是CFRunLoopRef：
 
-![源码](http://upload-images.jianshu.io/upload_images/1727123-99148ded680c56ef.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+![源码](./image/runloop1.png)
 
-![源码](http://upload-images.jianshu.io/upload_images/1727123-ce2a2cb08f180830.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+![源码](./image/runloop2.png)
 
 runloop在第一次**获取**时创建，然后在线程结束时销毁。所以，在子线程如果不手动获取runloop，它是一直都不会有的。
 
@@ -51,7 +51,7 @@ runloop在第一次**获取**时创建，然后在线程结束时销毁。所以
 
 其关系如下：
 
-![截自 深入理解RunLoop](http://upload-images.jianshu.io/upload_images/1727123-ab1600e55ebe5443.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+![截自 深入理解RunLoop](./image/runloop3.png)
 
 - 一个 RunLoop可以有多个Mode，每个 Mode 又包含若干个 Source/Timer/Observer。
 - Source/Timer/Observer又叫mode item。不同mode下的mode item互不影响
@@ -62,7 +62,7 @@ A、 source。`CFRunLoopSourceRef`事件源
 
 按照官方文档`CFRunLoopSourceRef`为3类，但数据结构只有两类(source0、source1)
 
-![官方文档截图](http://upload-images.jianshu.io/upload_images/1727123-65c16cb0447a8663.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+![官方文档截图](./image/runloop4.png)
 
  一、官方文档版分类：
  
@@ -559,9 +559,9 @@ static int32_t __CFRunLoopRun(CFRunLoopRef rl, CFRunLoopModeRef rlm, CFTimeInter
 
 根据苹果官方文档说明，上面的代码归纳起来就是下面这十步：
 
-![](http://upload-images.jianshu.io/upload_images/1727123-efadfb8a1e7bc596.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+![](./image/runloop5.png)
 
-![流程归纳](http://upload-images.jianshu.io/upload_images/1727123-b455eb58ecfd8dad.jpg?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+![流程归纳](./image/runloop6.jpg)
 
 主线程runloop会处理gcd端口事件源。上面第五步从源码来看是检测gcd端口事件..这里还是有点疑惑的。
 
@@ -574,9 +574,11 @@ Mach提供了诸如处理器调度、IPC (进程间通信)等基础服务。在 
 
 Runloop通过`mach_msg()`函数接收、发送消息。它的本质是调用函数`mach_msg_trap()`，相当于是一个系统调用，会触发内核状态切换。当你在用户态调用`mach_msg_trap()` 时会触发陷阱机制，切换到内核态；内核态中内核实现的 `mach_msg()` 函数会完成实际的工作。
 
-![截自 深入理解runloop](http://upload-images.jianshu.io/upload_images/1727123-3d029f112ddd8930.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+![截自 深入理解runloop](./image/runloop7.png)
 
 runloop用`mach_msg()`这个函数去接收消息，**如果没有内核发送port 消息过来，内核会将线程置于等待状态 mach_msg_trap() **(当前线程阻塞)。如果有消息返回（内核开新线程返回消息），判断消息类型处理事件，并通过modeItem的callback回调。(总结：基于port的source1，监听端口，端口有消息，触发回调；而source0，要手动标记为待处理和手动唤醒runloop)
+
+例如你在模拟器里跑起一个 iOS 的 App，然后在 App 静止时点击暂停，你会看到主线程调用栈是停留在 mach_msg_trap() 这个地方。
 
 关于Mach消息发送机制，可以看看[这篇文章](http://www.jianshu.com/p/a764aad31847)
 
@@ -718,6 +720,16 @@ runloop的回调，一般都是通过一个名字很长的函数，比如下面�
 #### runloop退出的条件
 一次性执行；app退出；线程关闭；设置最大时间到期；modeItem为空（实际上observer不算是源，所以就算有observer也是会返回的）；
 
+### runloop应用举例
+
+- 当点击app的按钮时（事件响应）
+
+![](./image/runloop14.png)
+
+苹果注册了一个 Source1 (基于 mach port 的) 用来接收系统事件，其回调函数为 `__IOHIDEventSystemClientQueueCallback()`。当一个硬件事件(触摸/锁屏/摇晃等)发生后，首先由 `IOKit.framework` 生成一个 `IOHIDEvent` 事件并由 `SpringBoard` 接收。`SpringBoard` 只接收按键(锁屏/静音等)，触摸，加速，接近传感器等几种 `Event`，随后用 `mach port` 转发给需要的App进程。随后苹果注册的那个 `Source1` 就会触发回调，并调用` _UIApplicationHandleEventQueue()` 进行应用内部分发。 `_UIApplicationHandleEventQueue()` 会把 `IOHIDEvent` 处理并包装成 `UIEvent` 进行处理或分发，其中包括识别 UIGesture/处理屏幕旋转/发送给 `UIWindow` 等。通常事件比如 UIButton 点击、touchesBegin/Move/End/Cancel 事件都是在这个回调中完成的。
+
+![](./image/runloop15.png)
+
 ### 五、如何使用
 #### 开启和关闭的接口
 #### 1.CFRunLoopRef（CoreFoundation 框架）
@@ -749,7 +761,7 @@ void CFRunLoopRun(void) {	/* DOES CALLOUT */
 
 - 运行在`NSDefaultRunLoopMode`模式下。直到调用`CFRunLoopStop()`强制停止（kCFRunLoopRunStopped）或者source/timer/一个都没有了（kCFRunLoopRunFinished）。即源码`int32_t __CFRunLoopRun()`（就是之前上面那个几百行的）中的：
 
-![](http://upload-images.jianshu.io/upload_images/1727123-db454a3a283a40d7.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+![](./image/runloop8.png)
 
 1.2
 
@@ -989,7 +1001,7 @@ performSelector中的方法addtask不会执行，因为线程的方法瞬间就�
 }
 ```
 
-![over不会被打印出来](http://upload-images.jianshu.io/upload_images/1727123-ac9cce6904fd3e56.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+![over不会被打印出来](./image/runloop9.png)
 
 如果想runloop可以终止的，官方推荐：`- (BOOL)runMode:(NSString *)mode beforeDate:(NSDate *)limitDate;`官方example:
 
@@ -1029,7 +1041,7 @@ BOOL shouldKeepRunning = YES;        //全局变量
 }
 ```
 
-![](http://upload-images.jianshu.io/upload_images/1727123-0e8234a2def4e202.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+![](./image/runloop10.png)
 
 运行，"over"被打印出来了，证明runloop退出。点击屏幕，addtask方法没有执行。
 这个方法创建Source 0 任务，并分发到指定线程的 RunLoop 中。
@@ -1092,11 +1104,11 @@ CFRunLoopObserverRef observer = CFRunLoopObserverCreateWithHandler(CFAllocatorGe
 
 上面这段代码放到vc的viewDidLoad中跑，其他什么也不加不做，会发现控制台打印最后停在“32”的地方：
 
-![按钮点击前](http://upload-images.jianshu.io/upload_images/1727123-ed3f3b5812f0efdc.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+![按钮点击前](./image/runloop11.png)
 
 这个就是`kCFRunLoopBeforeWaiting = (1UL << 5), // runloop即将进入休眠`。然后点击一下屏幕上的一个按钮，然后看控制台输出，可知runloop先唤醒，然后处理各种事件（包括点击事件），最后又回到休眠状态
 
-![按钮点击后，还有很多行打印没截，但最后停在休眠32的地方](http://upload-images.jianshu.io/upload_images/1727123-c740c9588801e7c1.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+![按钮点击后，还有很多行打印没截，但最后停在休眠32的地方](./image/runloop12.png)
 
 
 ### 其他runloop相关
@@ -1140,7 +1152,7 @@ MRC内存管理原则：谁创建谁释放。代码中使用autorelease来对per
 
 先看下面这张图：
 
-![](http://upload-images.jianshu.io/upload_images/1727123-0d601363d58d71d4.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+![](./image/runloop13.png)
 
 iPhone应用程序运行->有触摸事件->cocoaTouch创建事件，生成事件对象->cocoaTouch创建自动释放池->应用处理事件（就是一些我们自己写的代码，并有可能产生一些中间、临时对象，这些对象放在自动释放池中）->事件处理完毕自动释放池释放
 
