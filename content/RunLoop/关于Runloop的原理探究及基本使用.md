@@ -1098,6 +1098,11 @@ CFRunLoopObserverRef observer = CFRunLoopObserverCreateWithHandler(CFAllocatorGe
 ```
 创建observer，用`CFRunLoopObserverCreateWithHandler`函数，参数1：分配内存 参数2：要监听哪个runloop状态的标记 参数3：是否重复。这个observer是只调用一次还是runloop每次循环都调 参数4：优先级，一般传0 参数5：回调
 
+可以通过监听runloop状态，从而达到检测是否发生卡顿的目的。
+如果 RunLoop 的线程，进入睡眠前方法的执行时间过长而导致无法进入睡眠，或者线程唤醒后接收消息时间过长而无法进入下一步的话，就可以认为是线程受阻了。如果这个线程是主线程的话，表现出来的就是出现了卡顿。所以，如果我们要利用 RunLoop 原理来监控卡顿的话，就是要关注这两个阶段。RunLoop 在进入睡眠之前和唤醒后的两个 loop 状态定义的值，分别是 kCFRunLoopBeforeSources 和 kCFRunLoopAfterWaiting ，也就是要触发 Source0 回调和接收 mach_port 消息两个状态。
+
+将创建好的观察者 runLoopObserver 添加到主线程 RunLoop 的 common 模式下观察。然后，创建一个持续的子线程专门用来监控主线程的 RunLoop 状态。一旦发现进入睡眠前的 kCFRunLoopBeforeSources 状态，或者唤醒后的状态 kCFRunLoopAfterWaiting，在设置的时间阈值内一直没有变化，即可判定为卡顿。接下来，我们就可以 dump 出堆栈的信息，从而进一步分析出具体是哪个方法的执行时间过长。
+
 ##### 5.CF的内存管理
 1. 凡是带有Create、Copy、Retain等字眼的函数，创建出来的对象，都需要在最后做一次release
 2. release函数：CFRelease(对象);
@@ -1159,7 +1164,7 @@ iPhone应用程序运行->有触摸事件->cocoaTouch创建事件，生成事件
 *官方文档：The Application Kit creates an autorelease pool on the main thread at the beginning of every cycle of the event loop, and drains it at the end, thereby releasing any autoreleased objects generated while processing an event. 在主线程事件循环开始的时候创建了自动释放池,在事件循环结束的时候释放自动释放池，因此在处理事件过程中产生的一些自动释放的对象会被释放掉*
 
 实际上,苹果在主线程 RunLoop 里注册了两个 Observer。第一个 Observer 监视的事件是即将进入Loop，其优先级最高，保证创建释放池发生在其他所有回调之前。
-第二个 Observer 监视了两个事件：准备进入休眠时** 释放旧的池并创建新池**；即将退出Loop时释放自动释放池。优先级最低，保证其释放池子发生在其他所有回调之后。
+第二个 Observer 监视了两个事件：准备进入休眠时**释放旧的池并创建新池**；即将退出Loop时释放自动释放池。优先级最低，保证其释放池子发生在其他所有回调之后。
 
 代码中，viewDidLoad的代码执行完runloop就要进入休眠了，这时候先释放旧池并把person对象释放。点击事件把runloop唤醒，之后再新池里访问释放掉的对象就报野指针错误了。
 
